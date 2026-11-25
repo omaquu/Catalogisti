@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="fi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Catalogisti · 3D &amp; Peliprojektien kirjasto</title>
+  <link rel="stylesheet" href="catalog.css?v=4">
+  <script defer src="model-viewer.umd.js?v=4"></script>
+  <script defer src="catalog-data.js?v=4"></script>
+  <script defer src="catalog.js?v=4"></script>
+</head>
+<body>
+  <div class="eagle-shell">
+    <aside class="eagle-sidebar" aria-label="Kirjasto ja suodattimet">
+      <div class="sidebar-head">
+        <a class="brand" href="./index.html">
+          <span class="brand-dot" aria-hidden="true"></span>
+          <span>Catalogisti</span>
+          <small id="project-count-pill">1 projekti</small>
+        </a>
+        <div class="icon-actions">
+          <button id="folder" class="btn-import-folder" type="button" title="Tuo oma projektikansio (toimii myös GitHub Pagesissa)">+ Tuo kansio</button>
+          <button id="budget-open" type="button" title="Osa- ja materiaalibudjetit">Budjetit</button>
+          <button id="import" type="button" title="Tuo arviot JSON-tiedostosta">Tuo</button>
+          <button id="export" type="button" title="Vie arviot JSON-tiedostoksi">Vie</button>
+        </div>
+        <div id="reconnect-bar" class="reconnect-bar" hidden></div>
+        <input id="folder-input" type="file" webkitdirectory multiple hidden>
+        <input id="import-input" type="file" accept=".json,application/json" hidden>
+      </div>
+
+      <div class="sidebar-scroll">
+        <section class="nav-group" aria-label="Näkymät">
+          <p class="nav-heading">Kirjasto</p>
+          <div id="smart-views" class="nav-list"></div>
+        </section>
+
+        <details class="nav-group" open>
+          <summary class="nav-heading">
+            <span>Projektit ja kansiot</span>
+            <button id="add-project-inline" class="heading-add" type="button" title="Tuo uusi projektikansio">+</button>
+          </summary>
+          <div id="project-tree" class="nav-list tree-root"></div>
+        </details>
+
+        <details class="nav-group" open>
+          <summary class="nav-heading">Kategoriat</summary>
+          <div id="category-tree" class="nav-list"></div>
+        </details>
+
+        <details class="nav-group">
+          <summary class="nav-heading">Tarkenna suodatusta</summary>
+          <div class="filter-controls">
+            <label for="project-select">Projekti</label>
+            <select id="project-select"><option value="">Kaikki projektit</option></select>
+            <label for="folder-select">Alakansio</label>
+            <select id="folder-select"><option value="">Kaikki kansiot</option></select>
+            <label for="category">Kategoria</label>
+            <select id="category"><option value="">Kaikki kategoriat</option></select>
+            <label for="part">Osa</label>
+            <select id="part"><option value="">Kaikki osat</option></select>
+            <label for="material">Materiaali</label>
+            <select id="material"><option value="">Kaikki materiaalit</option></select>
+            <label for="tag-filter">Tagi</label>
+            <select id="tag-filter"><option value="">Kaikki tagit</option></select>
+            <label for="stage">Mallin vaihe</label>
+            <select id="stage">
+              <option value="">Kaikki vaiheet</option>
+              <option value="glb">GLB olemassa</option>
+              <option value="gameready">Gameready (budjetissa + teksturoitu)</option>
+              <option value="over-budget-tris">Yli kolmiobudjetin</option>
+              <option value="modly">Modly Prepare for Game</option>
+              <option value="modly-local">Modly · Gameready-jono</option>
+              <option value="modly-weapon">Modly · Aseenosat</option>
+              <option value="baked">Bake olemassa</option>
+              <option value="optimized">Optimoitu GLB</option>
+              <option value="needs-prep">GLB odottaa käsittelyä</option>
+              <option value="textures">Tekstuuri ilman GLB:tä</option>
+              <option value="source">Lähdeaineisto ilman GLB:tä</option>
+              <option value="splat">Gaussian splat</option>
+              <option value="native">Godot-moduuli</option>
+              <option value="gltf">glTF ilman GLB:tä</option>
+            </select>
+            <label for="review-filter">Laatuarvio</label>
+            <select id="review-filter">
+              <option value="">Kaikki arviot</option>
+              <option value="unreviewed">Arvioimatta</option>
+              <option value="approved">Hyväksytty</option>
+              <option value="regenerate">Generoi uudelleen</option>
+              <option value="remove">Poistoehdotus</option>
+              <option value="flag:reduce_tris">Karsittava kolmioita</option>
+              <option value="flag:duplicate_exists">Samanlainen jo olemassa</option>
+            </select>
+            <label class="check"><input id="depth" type="checkbox"> Syvyys- tai korkeuskartta</label>
+            <button class="quiet" id="reset" type="button">Tyhjennä suodattimet</button>
+          </div>
+        </details>
+
+        <div class="sidebar-links">
+          <a href="models.csv" download>Lataa CSV</a>
+          <a href="README.md">Ohje</a>
+        </div>
+      </div>
+    </aside>
+
+    <main id="drop-zone" class="eagle-main">
+      <header class="eagle-toolbar">
+        <div class="toolbar-left">
+          <h1 id="breadcrumb">Kaikki assetit</h1>
+          <span id="result-count" class="count-pill"></span>
+        </div>
+        <div class="toolbar-center">
+          <label class="zoom-wrap" title="Korttien koko">
+            <span class="zoom-icon" aria-hidden="true">▫</span>
+            <input id="zoom" type="range" min="135" max="300" value="185" aria-label="Korttien koko">
+            <span class="zoom-icon" aria-hidden="true">◻</span>
+          </label>
+        </div>
+        <div class="toolbar-right">
+          <select id="sort" aria-label="Järjestys">
+            <option value="name">Nimi</option>
+            <option value="project">Projekti / kansio</option>
+            <option value="triangles">Eniten kolmioita</option>
+            <option value="budget">Eniten yli budjetin</option>
+          </select>
+          <input id="query" type="search" placeholder="Hae nimellä, projektilla, tagilla...">
+        </div>
+      </header>
+
+      <div id="active-filters" class="active-filters" hidden></div>
+      <p id="message" role="status" aria-live="polite">Ladataan assetteja...</p>
+      <noscript><p class="noscript">Catalogisti tarvitsee JavaScriptin.</p></noscript>
+
+      <div class="grid-scroll">
+        <div id="results" class="eagle-grid" aria-label="Assetit"></div>
+      </div>
+
+      <nav class="pagination" aria-label="Hakutulossivut">
+        <button id="previous" type="button">Edellinen</button>
+        <span id="page"></span>
+        <button id="next" type="button">Seuraava</button>
+      </nav>
+    </main>
+
+    <aside class="eagle-inspector" aria-label="Tiedot ja 3D-esikatselu">
+      <div id="inspector-empty" class="inspector-empty">
+        <p>Valitse kortti nähdäksesi 3D-soittimen, projektin, kansiot, tagit ja laatuarvion — tai tuo oma mallikansio vasemmasta reunasta.</p>
+      </div>
+      <div id="inspector-host">
+        <div id="inspector-content" class="inspector-content" hidden>
+          <div class="insp-head">
+            <div>
+              <p id="detail-kind"></p>
+              <h2 id="detail-title"></h2>
+            </div>
+            <button id="expand-detail" type="button" title="Suurenna 3D-näkymä">⤢</button>
+          </div>
+
+          <div class="preview-column">
+            <div id="preview"></div>
+            <div class="preview-bar">
+              <p id="preview-tip"></p>
+              <button id="choose-model" type="button" hidden>Avaa GLB</button>
+              <input id="model-input" type="file" accept=".glb,model/gltf-binary" hidden>
+            </div>
+            <label class="field-label" for="variant">Versio / kuva</label>
+            <select id="variant"></select>
+          </div>
+
+          <div class="insp-meta-box">
+            <div class="insp-project-row">
+              <span class="meta-label">Projekti &amp; kansio</span>
+              <div class="insp-path-chips">
+                <button id="insp-project" class="project-chip" type="button"></button>
+                <button id="insp-folder" class="folder-chip" type="button"></button>
+              </div>
+            </div>
+            <div>
+              <span class="meta-label">Tagit</span>
+              <div id="insp-tags" class="tag-list"></div>
+            </div>
+          </div>
+
+          <div id="metadata"></div>
+          <section id="references" aria-label="Referenssikuvat" hidden></section>
+
+          <form id="review-form">
+            <h3>Laatuarvio</h3>
+            <label for="decision">Päätös</label>
+            <select id="decision">
+              <option value="unreviewed">Arvioimatta</option>
+              <option value="approved">Hyväksytty</option>
+              <option value="regenerate">Generoi uudelleen</option>
+              <option value="remove">Poistoehdotus</option>
+            </select>
+            <div class="review-flags" role="group" aria-label="Nopeat tarkistusliput">
+              <label class="flag-check">
+                <input id="flag-reduce-tris" type="checkbox">
+                <span>Voitais kokeilla pienentää vielä kolmioita</span>
+              </label>
+              <label class="flag-check">
+                <input id="flag-duplicate" type="checkbox">
+                <span>Toinen samanlainen modelli on jo</span>
+              </label>
+            </div>
+            <label for="notes">Huomiot</label>
+            <textarea id="notes" rows="2" maxlength="4000" placeholder="Esim. siluetti, mittakaava, tekstuurit..."></textarea>
+            <button class="primary" type="submit">Tallenna arvio</button>
+            <p id="saved" role="status" aria-live="polite"></p>
+          </form>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <dialog id="detail" aria-labelledby="detail-modal-title">
+    <div class="dialog-head">
+      <div><p id="detail-modal-sub"></p><h2 id="detail-modal-title">3D-katselin</h2></div>
+      <form method="dialog"><button aria-label="Sulje" type="submit">Sulje</button></form>
+    </div>
+    <div id="detail-mount" class="detail-mount"></div>
+  </dialog>
+
+  <dialog id="budget-dialog" aria-labelledby="budget-title">
+    <div class="dialog-head">
+      <h2 id="budget-title">Osa- ja materiaalibudjetit</h2>
+      <form method="dialog"><button type="submit">Sulje</button></form>
+    </div>
+    <div class="budget-table">
+      <h3>Osakohtaiset rajat</h3>
+      <table>
+        <thead><tr><th>Osa</th><th>Pisin sivu (m)</th><th>LOD0 (kolmiota)</th><th>LOD1 / LOD2</th><th>Kiinnitys</th></tr></thead>
+        <tbody id="budget-rows"></tbody>
+      </table>
+      <h3>Materiaalikohtaiset suositukset (TripoSG / TRELLIS.2)</h3>
+      <table>
+        <thead><tr><th>Materiaali / pinta</th><th>Kolmiokerroin</th><th>Tyypillinen budjetti</th><th>Perustelu</th></tr></thead>
+        <tbody>
+          <tr><th>Sileä emali, lasi, maali, kivi</th><td>0.6x–0.75x</td><td>1 200 – 2 500</td><td>Selkeä siluetti; 2K PBR Albedo + Roughness tekee pinnan ilman tiheää verkkoa.</td></tr>
+          <tr><th>Sileä kupari- / teräsputki &amp; säiliö</th><td>0.7x–0.85x</td><td>1 500 – 3 000</td><td>Sylintereissä maltillinen kehäjaotus riittää; saumat ja niitit tulevat tekstuurista.</td></tr>
+          <tr><th>Puu, nahka, kangas, turkis</th><td>0.85x–1.0x</td><td>2 500 – 8 000</td><td>Poimut ja orgaaninen muoto vaativat puhtaan kaarevuuden ilman kulmikkuutta.</td></tr>
+          <tr><th>Koristeellinen messinki, kellokoneisto, ratas</th><td>1.0x–1.2x</td><td>2 000 – 8 000</td><td>Terävät siluetin hampaat, kaulukset ja kehykset tarvitsevat lisää kolmioita.</td></tr>
+          <tr><th>Kristalli, rautaristikko, sankarirakenteet</th><td>1.0x–1.25x</td><td>3 500 – 25 000</td><td>Ristikkosiluetit ja monimuotoiset bossit/veturit vaativat suuremman ylärajan.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </dialog>
+</body>
+</html>
