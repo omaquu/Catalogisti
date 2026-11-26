@@ -218,10 +218,93 @@ function measureGlb(file) {
     }
     out.images = (gltf.images || []).length;
     if (min[0] !== Infinity) out.bounds = max.map((v, i) => Math.round((v - min[i]) * 1000) / 1000);
+    // Embedded texture sizes: read each image's header from the binary chunk.
+    const binStart = 20 + jsonLen + 8;
+    out.textures = (gltf.images || []).map((img, i) => {
+      const bv = gltf.bufferViews?.[img.bufferView];
+      if (!bv) return { index: i, name: img.name || "", mime: img.mimeType || "", external: img.uri || "" };
+      const head = Buffer.alloc(Math.min(bv.byteLength, 65536));
+      fs.readSync(fd, head, 0, head.length, binStart + (bv.byteOffset || 0));
+      return { index: i, name: img.name || "", mime: img.mimeType || "", bytes: bv.byteLength, ...imageSize(head) };
+    });
   } catch { /* unreadable GLB: leave zeros */ } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
   return out;
+}
+
+/** Width/height from PNG, JPEG or WebP header bytes. */
+function imageSize(b) {
+  try {
+    if (b.readUInt32BE(0) === 0x89504e47) return { width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
+    if (b[0] === 0xff && b[1] === 0xd8) {
+      let i = 2;
+      while (i + 9 < b.length) {
+        if (b[i] !== 0xff) { i++; continue; }
+        const m = b[i + 1], len = b.readUInt16BE(i + 2);
+        if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { height: b.readUInt16BE(i + 5), width: b.readUInt16BE(i + 7) };
+        i += 2 + len;
+      }
+    }
+    if (b.toString("ascii", 0, 4) === "RIFF" && b.toString("ascii", 8, 12) === "WEBP") {
+      const kind = b.toString("ascii", 12, 16);
+      if (kind === "VP8 ") return { width: b.readUInt16LE(26) & 0x3fff, height: b.readUInt16LE(28) & 0x3fff };
+      if (kind === "VP8L") { const v = b.readUInt32LE(21); return { width: (v & 0x3fff) + 1, height: ((v >> 14) & 0x3fff) + 1 }; }
+      if (kind === "VP8X") return { width: 1 + b.readUIntLE(24, 3), height: 1 + b.readUIntLE(27, 3) };
+    }
+  } catch { /* unknown */ }
+  return {};
+}
+
+/** Image file size for a loose texture file. */
+function imageFileSize(file) {
+  let fd;
+  try { fd = fs.openSync(file, "r"); const b = Buffer.alloc(65536); const n = fs.readSync(fd, b, 0, b.length, 0); return imageSize(b.subarray(0, n)); }
+  catch { return {}; } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+/**
+ * Rewrite a GLB with every embedded image passed through resize(buffer, mime) → {data, mime} | null.
+ * Buffer views are re-packed (4-byte aligned); everything else is copied unchanged.
+ */
+function rewriteGlbImages(file, outFile, resize) {
+  const buf = fs.readFileSync(file);
+  if (buf.readUInt32LE(0) !== 0x46546c67) throw new Error("Not a GLB file");
+  const jsonLen = buf.readUInt32LE(12);
+  const gltf = JSON.parse(buf.toString("utf-8", 20, 20 + jsonLen));
+  const binStart = 20 + jsonLen + 8;
+  const binLen = buf.length >= binStart ? buf.readUInt32LE(20 + jsonLen) : 0; // a GLB may have no binary chunk
+  const bin = buf.subarray(binStart, binStart + binLen);
+  const imageViews = new Map();
+  for (const img of gltf.images || []) if (img.bufferView !== undefined) imageViews.set(img.bufferView, img);
+  const parts = [];
+  let offset = 0, changed = 0;
+  (gltf.bufferViews || []).forEach((bv, i) => {
+    let data = bin.subarray(bv.byteOffset || 0, (bv.byteOffset || 0) + bv.byteLength);
+    const img = imageViews.get(i);
+    if (img) {
+      const r = resize(Buffer.from(data), img.mimeType || "");
+      if (r && r.data) { data = r.data; if (r.mime) img.mimeType = r.mime; changed++; }
+    }
+    const pad = (4 - (offset % 4)) % 4;
+    if (pad) { parts.push(Buffer.alloc(pad)); offset += pad; }
+    bv.byteOffset = offset; bv.byteLength = data.length;
+    parts.push(data); offset += data.length;
+  });
+  const tail = (4 - (offset % 4)) % 4;
+  if (tail) parts.push(Buffer.alloc(tail));
+  const newBin = Buffer.concat(parts);
+  if (gltf.buffers?.[0]) gltf.buffers[0].byteLength = newBin.length;
+  let json = Buffer.from(JSON.stringify(gltf), "utf-8");
+  json = Buffer.concat([json, Buffer.alloc((4 - (json.length % 4)) % 4, 0x20)]);
+  const header = Buffer.alloc(12);
+  header.writeUInt32LE(0x46546c67, 0); header.writeUInt32LE(2, 4); header.writeUInt32LE(12 + 8 + json.length + 8 + newBin.length, 8);
+  const jh = Buffer.alloc(8); jh.writeUInt32LE(json.length, 0); jh.writeUInt32LE(0x4e4f534a, 4);
+  const bh = Buffer.alloc(8); bh.writeUInt32LE(newBin.length, 0); bh.writeUInt32LE(0x004e4942, 4);
+  const chunks = newBin.length ? [header, jh, json, bh, newBin] : [header, jh, json];
+  if (!newBin.length) header.writeUInt32LE(12 + 8 + json.length, 8);
+  fs.writeFileSync(outFile, Buffer.concat(chunks));
+  return { changed, size: fs.statSync(outFile).size };
 }
 
 function fileInfo(file) {
@@ -319,7 +402,7 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
       const asset = {
         id: uniqueId(lib, stem), kind: "model", name, category: categories[0], categories,
         tags: autoTags(stem, [meta.role, folder]), project, folder, file,
-        triangles: m.triangles, embedded_images: m.images, bounds: m.bounds || meta.bounds_m || null,
+        triangles: m.triangles, embedded_images: m.images, textures: m.textures || [], bounds: m.bounds || meta.bounds_m || null,
         ...fileInfo(file),
         source: cleanSource({ image: meta.image, prompt: meta.prompt, tool: meta.geom_run_id ? "Modly" : meta.tool, run_ids: [meta.geom_run_id, meta.tex_run_id].filter(Boolean), budget: meta.faces || meta.max_faces }),
         versions: [], review: { decision: "unreviewed", flags: [], notes: "", updated: null, by: null },
@@ -333,7 +416,13 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
     const groups = new Map();
     for (const file of walk(root, IMAGE_EXT)) {
       if (known.has(file.toLowerCase())) { skipped.push(file); continue; }
-      const { base, map } = splitMap(path.basename(file, path.extname(file)));
+      let { base, map } = splitMap(path.basename(file, path.extname(file)));
+      // A folder per texture with files named just "albedo.jpg", "normal.jpg"…: the folder is the texture's name.
+      const bare = /^(albedo|diffuse|diff|basecolor|base_color|color|col|normal|nrm|nor|normal_gl|rough|roughness|metal|metallic|metalness|ao|occlusion|height|disp|displacement|orm|arm|mask)$/i;
+      if (bare.test(path.basename(file, path.extname(file)))) {
+        base = path.basename(path.dirname(file));
+        map = splitMap("x_" + path.basename(file, path.extname(file))).map;
+      }
       const key = path.join(path.dirname(file), base).toLowerCase();
       if (!groups.has(key)) groups.set(key, { dir: path.dirname(file), base, maps: {} });
       const g = groups.get(key);
@@ -594,6 +683,7 @@ function relinkMoved(lib, extraRoots = []) {
     if (a.locations) a.locations = a.locations.map((f) => fix(f, "files"));
     if (a.maps) for (const k of Object.keys(a.maps)) a.maps[k] = fix(a.maps[k], "files");
     if (a.source?.image) a.source.image = fix(a.source.image, "source_images");
+    if (a.source?.references) a.source.references = a.source.references.map((f) => fix(f, "source_images"));
     for (const v of a.versions || []) v.file = fix(v.file, "files");
     if (!exists(a.file)) stats.still_missing++;
   }
@@ -622,6 +712,109 @@ function missingCount(lib) {
   return lib.assets.filter((a) => !exists(a.file)).length + lib.projects.filter((p) => !exists(p.path)).length;
 }
 
+// ── Organize: real Windows folders by project, kind and category ──
+//   <root>\<Project>\Models\<Category>\chair.glb
+//   <root>\<Project>\Textures\<Category>\<Texture name>\albedo/normal/... files
+// Files already under <root> are moved; files elsewhere (e.g. a shared texture library) are copied,
+// so other projects keep working. Every run is logged and can be undone.
+
+function libraryRoot(lib) {
+  return lib.settings?.library_root || path.join(os.homedir(), "Documents", "Catalogisti");
+}
+
+function safeName(name) {
+  return String(name).replace(/[<>:"/\\|?*\x00-\x1f]+/g, " ").replace(/\s+/g, " ").trim().replace(/[. ]+$/, "") || "Other";
+}
+
+function organizeTarget(lib, a, root) {
+  const base = path.join(root, safeName(a.project || "Unsorted"), a.kind === "texture" ? "Textures" : "Models", safeName(cats(a)[0]));
+  return a.kind === "texture" ? path.join(base, safeName(a.name)) : base;
+}
+function cats(a) { return a.categories?.length ? a.categories : [a.category || "Other"]; }
+
+function freeName(dir, file, taken) {
+  const ext = path.extname(file), stem = path.basename(file, ext);
+  let cand = path.join(dir, stem + ext), n = 2;
+  while ((exists(cand) && path.resolve(cand).toLowerCase() !== path.resolve(file).toLowerCase()) || taken.has(cand.toLowerCase())) cand = path.join(dir, stem + "_" + n++ + ext);
+  taken.add(cand.toLowerCase());
+  return cand;
+}
+
+/** What organizing would do: [{id, from, to, op: "move"|"copy"}] for files not already in place. */
+function planOrganize(lib, { root = libraryRoot(lib), ids } = {}) {
+  const ops = [], taken = new Set();
+  for (const a of lib.assets) {
+    if (ids && !ids.includes(a.id)) continue;
+    if (!exists(a.file)) continue;
+    const dir = organizeTarget(lib, a, root);
+    const files = a.kind === "texture" ? [...new Set(Object.values(a.maps || {}).concat(a.file))] : [a.file];
+    for (const f of files) {
+      if (!exists(f)) continue;
+      if (path.resolve(path.dirname(f)).toLowerCase() === path.resolve(dir).toLowerCase()) continue;
+      ops.push({ id: a.id, from: f, to: freeName(dir, f, taken), op: under(f, root) ? "move" : "copy" });
+    }
+  }
+  return ops;
+}
+
+function organizeLibrary(lib, { root = libraryRoot(lib), ids } = {}) {
+  const ops = planOrganize(lib, { root, ids });
+  const snapshot = {};
+  for (const a of lib.assets) snapshot[a.id] = { file: a.file, maps: a.maps ? { ...a.maps } : undefined, source: a.source ? JSON.parse(JSON.stringify(a.source)) : undefined };
+  const projectsBefore = JSON.parse(JSON.stringify(lib.projects));
+  const enabledByAsset = new Map(lib.assets.map((a) => [a.id, isVisible(lib, a)]));
+  const done = [];
+  // Freeze reference images before files move away from their neighbours.
+  for (const a of lib.assets) if (a.kind === "model" && ops.some((o) => o.id === a.id)) {
+    const refs = referencesFor(a);
+    if (refs.length) a.source = { ...(a.source || {}), references: refs };
+  }
+  for (const o of ops) {
+    fs.mkdirSync(path.dirname(o.to), { recursive: true });
+    if (o.op === "move") {
+      try { fs.renameSync(o.from, o.to); } catch { fs.copyFileSync(o.from, o.to); fs.rmSync(o.from); }
+    } else fs.copyFileSync(o.from, o.to);
+    done.push(o);
+    const a = lib.assets.find((x) => x.id === o.id);
+    if (a.file === o.from) { a.file = o.to; Object.assign(a, fileInfo(o.to)); }
+    if (a.maps) for (const k of Object.keys(a.maps)) if (a.maps[k] === o.from) a.maps[k] = o.to;
+    a.updated = new Date().toISOString();
+  }
+  // Sources follow the new layout: one per project folder; folders left without assets are dropped.
+  const projectNames = new Set(lib.assets.filter((a) => under(a.file, root)).map((a) => safeName(a.project || "Unsorted")));
+  for (const name of projectNames) {
+    const dir = path.join(root, name);
+    if (lib.projects.some((p) => path.resolve(p.path).toLowerCase() === dir.toLowerCase())) continue;
+    const anyShown = lib.assets.some((a) => under(a.file, dir) && enabledByAsset.get(a.id));
+    lib.projects.push({ name, path: dir, kind: "organized", imported: new Date().toISOString(), ...(anyShown ? {} : { enabled: false }) });
+  }
+  lib.projects = lib.projects.filter((p) => lib.assets.some((a) => under(a.file, p.path)));
+  // Nested sources would count assets twice: keep the outermost organized one.
+  lib.projects = lib.projects.filter((p) => !lib.projects.some((q) => q !== p && q.kind === "organized" && under(p.path, q.path)));
+  lib.organize_log = { at: new Date().toISOString(), root, ops: done, snapshot, projects: projectsBefore };
+  return { moved: done.filter((o) => o.op === "move").length, copied: done.filter((o) => o.op === "copy").length, root };
+}
+
+/** Put every file back where the last organize found it and restore the old paths and sources. */
+function undoOrganize(lib) {
+  const log = lib.organize_log;
+  if (!log) throw new Error("Nothing to undo.");
+  for (const o of [...log.ops].reverse()) {
+    if (!exists(o.to)) continue;
+    if (o.op === "move") { fs.mkdirSync(path.dirname(o.from), { recursive: true }); try { fs.renameSync(o.to, o.from); } catch { fs.copyFileSync(o.to, o.from); fs.rmSync(o.to); } }
+    else fs.rmSync(o.to, { force: true });
+  }
+  for (const a of lib.assets) {
+    const snap = log.snapshot[a.id];
+    if (!snap) continue;
+    a.file = snap.file; if (snap.maps) a.maps = snap.maps; a.source = snap.source;
+    try { Object.assign(a, fileInfo(a.file)); } catch { /* missing */ }
+  }
+  lib.projects = log.projects;
+  delete lib.organize_log;
+  return { restored: log.ops.length };
+}
+
 function cleanSource(s) {
   const out = {};
   for (const [k, v] of Object.entries(s)) if (v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length)) out[k] = v;
@@ -645,7 +838,7 @@ function addAsset(lib, opts, by = "agent") {
     categories: opts.categories || (opts.category ? [opts.category] : kind === "model" ? classifyModels(stem) : [classifyTexture(stem)]),
     tags: [...new Set([...(opts.tags || []).map(normTag), ...autoTags(stem)])].filter(Boolean),
     project: opts.project || "Unsorted", folder: opts.folder || path.basename(path.dirname(file)), file,
-    ...(kind === "model" ? { triangles: m.triangles || 0, embedded_images: m.images || 0, bounds: m.bounds || null } : { maps: { albedo: file, ...(opts.maps || {}) }, tiling: opts.tiling ?? true }),
+    ...(kind === "model" ? { triangles: m.triangles || 0, embedded_images: m.images || 0, textures: m.textures || [], bounds: m.bounds || null } : { maps: { albedo: file, ...(opts.maps || {}) }, tiling: opts.tiling ?? true }),
     ...fileInfo(file),
     source: cleanSource({ image: opts.source_image, prompt: opts.prompt, tool: opts.tool, run_ids: opts.run_ids }),
     versions: [], review: { decision: "unreviewed", flags: [], notes: opts.note || "", updated: null, by: null },
@@ -680,7 +873,7 @@ function replaceFile(lib, id, file, note, by = "app") {
   Object.assign(a, fileInfo(file));
   if (a.kind === "model" && path.extname(file).toLowerCase() === ".glb") {
     const m = measureGlb(file);
-    a.triangles = m.triangles; a.embedded_images = m.images; a.bounds = m.bounds;
+    a.triangles = m.triangles; a.embedded_images = m.images; a.textures = m.textures || []; a.bounds = m.bounds;
   } else if (a.kind === "texture") {
     a.maps = { ...(a.maps || {}), albedo: file };
   }
@@ -802,7 +995,9 @@ const VARIANT_SUFFIX = /([_\-. ](v\d+|gr|game[_-]?ready|textured|texture|tex|bak
 const VIEW_SUFFIX = /[_\-. ](front|back|left|right|top|bottom|side|front45|rear45|input|source|ref|reference|view|views)\d*$/i;
 
 function variantKey(a) {
-  const stem = path.basename(a.file || "", path.extname(a.file || "")).toLowerCase();
+  let stem = path.basename(a.file || "", path.extname(a.file || "")).toLowerCase();
+  // Texture sets often name files just "albedo.jpg": compare those by their set name instead.
+  if (a.kind === "texture") stem = String(a.name || stem).toLowerCase().replace(/[^a-z0-9]+/g, "_");
   return a.kind + ":" + stem.replace(VARIANT_SUFFIX, "");
 }
 
@@ -920,6 +1115,8 @@ function containsWord(hay, needle) {
 function referencesFor(a) {
   if (a.kind !== "model") return [];
   const refs = new Set(a.source?.image && fs.existsSync(a.source.image) ? [a.source.image] : []);
+  // References recorded when the model was moved into the organized folders.
+  for (const r of a.source?.references || []) if (fs.existsSync(r)) refs.add(r);
   const keys = new Set();
   const stem = path.basename(a.file, path.extname(a.file)).toLowerCase().replace(VARIANT_SUFFIX, "");
   keys.add(stem);
@@ -1041,5 +1238,5 @@ module.exports = {
   setDataDir, dataDir, libraryPath, thumbsDir, load, save, mutate, emptyLibrary,
   slugify, normTag, autoTags, classifyModel, classifyTexture, measureGlb, splitMap,
   importFolder, importTextureLibrary, addAsset, replaceFile, setCategory, editTags, setReview, updateAsset,
-  relinkMoved, locateSource, resolveMoved, missingCount, listSources, setSourceEnabled, isVisible, visibleAssets, removeSource, clearLibrary, classifyModels, normalizeCategories, findDuplicates, resolveDuplicate, identicalFiles, editCategories, deleteAsset, ownedFiles, groupMembers, linkAssets, unlinkAsset, autoGroup, referencesFor, restoreVersion, findAsset, search, summary, needsFix, tagCounts, createRequest, updateRequest, completeRequest,
+  libraryRoot, planOrganize, organizeLibrary, undoOrganize, imageSize, imageFileSize, rewriteGlbImages, relinkMoved, locateSource, resolveMoved, missingCount, listSources, setSourceEnabled, isVisible, visibleAssets, removeSource, clearLibrary, classifyModels, normalizeCategories, findDuplicates, resolveDuplicate, identicalFiles, editCategories, deleteAsset, ownedFiles, groupMembers, linkAssets, unlinkAsset, autoGroup, referencesFor, restoreVersion, findAsset, search, summary, needsFix, tagCounts, createRequest, updateRequest, completeRequest,
 };

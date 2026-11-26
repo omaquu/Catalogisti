@@ -4,7 +4,7 @@
  * The library lives in library.json (see mcp/store.js); the MCP server edits the same
  * file, so this process watches it and tells the window to refresh.
  */
-const { app, BrowserWindow, ipcMain, dialog, shell, protocol, net, clipboard } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, protocol, net, clipboard, nativeImage } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { pathToFileURL } = require("url");
@@ -94,6 +94,12 @@ app.whenReady().then(() => {
   handle("library:get", () => {
     // Files that moved with their folder are found again before the window sees the library.
     let lib = store.load();
+    // Older records lack embedded texture sizes: measure them once.
+    const unmeasured = lib.assets.filter((a) => a.kind === "model" && !a.textures && /\.glb$/i.test(a.file) && fs.existsSync(a.file));
+    if (unmeasured.length) {
+      for (const a of unmeasured) a.textures = store.measureGlb(a.file).textures || [];
+      store.save(lib, "app"); lastOwnRevision = lib.revision;
+    }
     if (store.missingCount(lib)) {
       const stats = store.relinkMoved(lib);
       if (stats.files || stats.source_images || stats.sources) { store.save(lib, "app"); lastOwnRevision = lib.revision; relinkNote = stats; }
@@ -102,6 +108,42 @@ app.whenReady().then(() => {
     lib.assets = store.visibleAssets(lib);
     lib.hidden_count = total - lib.assets.length;
     return lib;
+  });
+  // Shrink embedded GLB textures to at most `max` pixels on the longest side. The result is a new file
+  // next to the original ("<name>_1024px.glb"); the asset switches to it and keeps the original as a version.
+  handle("asset:shrinkTextures", (id, max, toJpeg) => {
+    const lib = store.load();
+    const a = store.findAsset(lib, id);
+    if (!/\.glb$/i.test(a.file)) throw new Error("Only .glb models can be shrunk.");
+    const out = path.join(path.dirname(a.file), path.basename(a.file, path.extname(a.file)).replace(/_\d+px$/, "") + "_" + max + "px.glb");
+    const before = fs.statSync(a.file).size;
+    const r = store.rewriteGlbImages(a.file, out, (data, mime) => {
+      if (!/png|jpe?g/i.test(mime)) return null; // WebP/KTX2 are left as they are
+      const img = nativeImage.createFromBuffer(data);
+      if (img.isEmpty()) return null;
+      const { width, height } = img.getSize();
+      const scale = Math.min(1, max / Math.max(width, height));
+      const small = scale < 1 ? img.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: "best" }) : img;
+      const jpeg = toJpeg && /png/i.test(mime) ? true : /jpe?g/i.test(mime);
+      if (scale === 1 && !(toJpeg && /png/i.test(mime))) return null;
+      return jpeg ? { data: small.toJPEG(90), mime: "image/jpeg" } : { data: small.toPNG(), mime: "image/png" };
+    });
+    if (!r.changed) { fs.rmSync(out, { force: true }); return { changed: 0, before, after: before }; }
+    mutate((l) => store.replaceFile(l, id, out, "Textures shrunk to " + max + " px" + (toJpeg ? " (JPEG)" : ""), "owner"));
+    return { changed: r.changed, before, after: r.size, file: out };
+  });
+  handle("organize:plan", () => {
+    const lib = store.load();
+    const ops = store.planOrganize(lib);
+    return { root: store.libraryRoot(lib), move: ops.filter((o) => o.op === "move").length, copy: ops.filter((o) => o.op === "copy").length,
+      assets: new Set(ops.map((o) => o.id)).size, canUndo: !!lib.organize_log, sample: ops.slice(0, 6) };
+  });
+  handle("organize:run", () => mutate((lib) => store.organizeLibrary(lib)));
+  handle("organize:undo", () => mutate((lib) => store.undoOrganize(lib)));
+  handle("organize:root", async () => {
+    const { filePaths } = await dialog.showOpenDialog(win, { title: "Library folder (models and textures are organized here)", properties: ["openDirectory", "createDirectory"] });
+    if (!filePaths?.length) return null;
+    return mutate((lib) => { lib.settings = { ...(lib.settings || {}), library_root: filePaths[0] }; return filePaths[0]; });
   });
   handle("relink:note", () => { const n = relinkNote; relinkNote = null; return n; });
   handle("sources:locate", async (oldPath) => {
@@ -170,10 +212,10 @@ app.whenReady().then(() => {
     if (!filePaths?.length) return null;
     return mutate((l) => store.replaceFile(l, id, filePaths[0], "Replaced in the app", "owner"));
   });
-  handle("asset:thumbnail", (id, bytes) => {
+  handle("asset:thumbnail", (id, bytes, ver = 1) => {
     const rel = "thumbs/" + id + ".png";
     fs.writeFileSync(path.join(store.dataDir(), rel), Buffer.from(bytes));
-    return mutate((lib) => { const a = store.findAsset(lib, id); a.thumbnail = rel; a.thumb_mtime = a.mtime; return rel; });
+    return mutate((lib) => { const a = store.findAsset(lib, id); a.thumbnail = rel; a.thumb_mtime = a.mtime; a.thumb_ver = ver; return rel; });
   });
 
   handle("request:create", (r) => mutate((lib) => store.createRequest(lib, r, "owner")));

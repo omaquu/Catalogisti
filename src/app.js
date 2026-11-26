@@ -72,8 +72,11 @@
   function results() {
     const { words, tags } = queryParts();
     let list = lib.assets.filter((a) => {
-      if (state.view === "models" && a.kind !== "model") return false;
-      if (state.view === "textures" && a.kind !== "texture") return false;
+      if (state.view === "models" && (a.kind !== "model" || !ready(a))) return false;
+      if (state.view === "textures" && (a.kind !== "texture" || !ready(a))) return false;
+      if (state.view === "unapproved" && ready(a)) return false;
+      if (state.view === "all" && (state.kind || state.category) && !ready(a)) return false;
+      if (!trisOk(a)) return false;
       if (state.view === "needs_fix" && !needsFix(a)) return false;
       if (state.view === "unreviewed" && decision(a) !== "unreviewed") return false;
       if (state.view === "approved" && decision(a) !== "approved") return false;
@@ -111,10 +114,22 @@
     return list;
   }
 
+  function ready(a) { return decision(a) === "approved"; }
+  const TRIS = { "": [0, Infinity], lt1k: [0, 1000], "1k-5k": [1000, 5000], "5k-20k": [5000, 20000], "20k-100k": [20000, 100000], gt100k: [100000, Infinity] };
+  function trisOk(a) {
+    const r = $("tris-filter").value;
+    if (!r) return true;
+    if (a.kind !== "model") return false;
+    const [lo, hi] = TRIS[r];
+    return (a.triangles || 0) >= lo && (a.triangles || 0) < hi;
+  }
+
   // ── Sidebar ──
-  function navItem(label, count, pressed, onclick, { color, sub, caret } = {}) {
+  let collapsed = new Set();
+  try { collapsed = new Set(JSON.parse(localStorage.getItem("catalogisti.collapsed") || "[]")); } catch { /* optional */ }
+  function navItem(label, count, pressed, onclick, { color, sub, caret, onCaret } = {}) {
     return el("button", { class: "nav-item" + (sub ? " sub" : ""), type: "button", "aria-pressed": String(!!pressed), onclick },
-      caret !== undefined ? el("span", { class: "caret" }, caret) : null,
+      caret !== undefined ? el("span", { class: "caret", role: "button", tabindex: "0", title: "Show or hide categories", onclick: (e) => { e.stopPropagation(); onCaret?.(); } }, caret) : null,
       color ? el("span", { class: "dot", style: "background:" + color }) : null,
       el("span", {}, label), count !== undefined ? el("span", { class: "count" }, fmt.format(count)) : null);
   }
@@ -130,11 +145,10 @@
     $("total-pill").textContent = fmt.format(A.length) + " assets";
     const views = [
       ["all", "All assets", A.length, "#4c8dff"],
-      ["models", "Models", A.filter((a) => a.kind === "model").length, "#38bdf8"],
-      ["textures", "Textures", A.filter((a) => a.kind === "texture").length, "#a78bfa"],
+      ["models", "Models (ready)", A.filter((a) => a.kind === "model" && ready(a)).length, "#38bdf8"],
+      ["textures", "Textures (ready)", A.filter((a) => a.kind === "texture" && ready(a)).length, "#a78bfa"],
+      ["unapproved", "Unapproved", A.filter((a) => !ready(a)).length, "#6b7280"],
       ["needs_fix", "Needs fixing", A.filter(needsFix).length, "#e4b663"],
-      ["unreviewed", "Unreviewed", A.filter((a) => decision(a) === "unreviewed").length, "#6b7280"],
-      ["approved", "Approved", A.filter((a) => decision(a) === "approved").length, "#57c485"],
       ["remove", "Marked for removal", A.filter((a) => decision(a) === "remove").length, "#f0786a"],
       ["requests", "Generation requests", openReq, "#f472b6"],
     ];
@@ -144,8 +158,11 @@
 
     const catItems = [];
     for (const [kind, label, list, color] of [["model", "Models", info.categories.model, "#38bdf8"], ["texture", "Textures", info.categories.texture, "#a78bfa"]]) {
-      const ofKind = A.filter((a) => a.kind === kind);
-      catItems.push(navItem(label, ofKind.length, state.kind === kind && !state.category, () => setFilter({ kind }), { color, caret: "▾" }));
+      const ofKind = A.filter((a) => a.kind === kind && ready(a));
+      const isOpen = !collapsed.has(kind);
+      catItems.push(navItem(label, ofKind.length, state.kind === kind && !state.category, () => setFilter({ kind }), { color, caret: isOpen ? "▾" : "▸",
+        onCaret: () => { isOpen ? collapsed.add(kind) : collapsed.delete(kind); try { localStorage.setItem("catalogisti.collapsed", JSON.stringify([...collapsed])); } catch { /* optional */ } renderSidebar(); } }));
+      if (!isOpen) continue;
       const custom = [...new Set(ofKind.flatMap(cats))].filter((c) => !list.includes(c)).sort();
       for (const c of [...list, ...custom]) {
         const n = ofKind.filter((a) => cats(a).includes(c)).length;
@@ -211,6 +228,31 @@
       if (state.source === (s.path || s.name)) setFilter({});
       say("Removed " + r.removed + " asset(s)" + (r.kept_elsewhere ? "; " + r.kept_elsewhere + " kept from their other location" : "") + ". Use + Import to add a new folder.");
       await reload();
+    };
+  }
+
+  async function fillOrganize() {
+    const p = await call(api.organizePlan);
+    $("org-root").textContent = p.root;
+    $("org-plan").textContent = p.move + p.copy
+      ? p.assets + " asset(s): " + p.move + " file(s) moved, " + p.copy + " file(s) copied into the library folder."
+      : "Everything is already in place.";
+    $("org-ok").disabled = !(p.move + p.copy);
+    $("org-undo").hidden = !p.canUndo;
+  }
+
+  async function openOrganize() {
+    const dlg = $("dlg-organize");
+    dlg.returnValue = "";
+    await fillOrganize();
+    dlg.showModal();
+    dlg.onclose = async () => {
+      if (dlg.returnValue !== "ok") return;
+      say("Organizing files…");
+      const r = await call(api.organizeRun);
+      say("Organized: " + r.moved + " file(s) moved, " + r.copied + " copied into " + r.root + ". Undo is in the same dialog.");
+      await reload();
+      renderInspector(true);
     };
   }
 
@@ -299,7 +341,7 @@
   function select(id) {
     if (reviewDirty) flushReview();
     state.selected = id;
-    state.mapView = "albedo";
+    state.mapView = "sphere";
     state.media = null;
     for (const c of $("grid").querySelectorAll(".card")) c.setAttribute("aria-selected", String(c.dataset.id === id));
     renderInspector(true);
@@ -403,6 +445,7 @@
 
   function renderPreview(a) {
     const box = $("preview");
+    disposeSphere(box);
     const m = state.media;
     $("preview-caption").textContent = m && !(m.label || "").startsWith("Current") ? (m.type === "image" ? "Source image: " : "Earlier version: ") + base(m.file) : "";
     if (m && m.type === "image" && a.kind === "model") {
@@ -410,8 +453,10 @@
         el("img", { src: toUrl(m.file), alt: "Source image" })));
     } else if (a.kind === "model") {
       const mv = el("model-viewer", { src: toUrl(m?.file || a.file), "camera-controls": true, "auto-rotate": true, "shadow-intensity": "0.8",
-        exposure: "1.05", "environment-image": "neutral", "interaction-prompt": "none", alt: a.name });
+        exposure: "1.05", "environment-image": "neutral", "interaction-prompt": "auto", "interaction-prompt-threshold": "1500", alt: a.name });
       box.replaceChildren(mv);
+    } else if (!m && (state.mapView === "sphere" || state.mapView === "tile")) {
+      mountSphere(box, a, state.mapView);
     } else {
       const file = m?.file || (a.maps || {})[state.mapView] || a.file;
       box.replaceChildren(el("a", { href: "#", title: "Open in the default viewer", onclick: (e) => { e.preventDefault(); api.openFile(file); } },
@@ -419,10 +464,93 @@
     }
   }
 
+  // ── Material ball for textures (three.js): height map displaces the surface so relief/parallax shows ──
+  const spheres = new Map();
+  function mountSphere(box, a, shape, depth) {
+    spheres.get(box)?.dispose();
+    spheres.delete(box);
+    if (!window.CatalogistiSphere) { box.replaceChildren(el("p", { class: "hint" }, "3D preview unavailable")); return null; }
+    const maps = Object.fromEntries(Object.entries(a.maps || {}).map(([k, v]) => [k, toUrl(v)]));
+    const s = window.CatalogistiSphere.mount(box, maps, { shape, depth: depth ?? state.depth ?? 0.035 });
+    spheres.set(box, s);
+    return s;
+  }
+  function disposeSphere(box) { spheres.get(box)?.dispose(); spheres.delete(box); }
+
   function renderMaps(a) {
-    const maps = a.kind === "texture" ? Object.keys(a.maps || {}) : [];
-    $("maps").replaceChildren(...maps.map((m) => el("button", { type: "button", "aria-pressed": String(m === state.mapView),
-      onclick: () => { state.mapView = m; state.media = null; renderPreview(a); renderMaps(a); } }, m)));
+    const maps = a.kind === "texture" ? ["sphere", "tile", ...Object.keys(a.maps || {})] : [];
+    const label = { sphere: "◍ Sphere", tile: "▭ Tile" };
+    const items = maps.map((m) => el("button", { type: "button", "aria-pressed": String(m === state.mapView),
+      onclick: () => { state.mapView = m; state.media = null; renderPreview(a); renderMaps(a); } }, label[m] || m));
+    if (a.kind === "texture" && a.maps?.height && (state.mapView === "sphere" || state.mapView === "tile")) {
+      items.push(el("label", { class: "depth" }, "Depth",
+        el("input", { type: "range", min: "0", max: "0.12", step: "0.005", value: String(state.depth ?? 0.035),
+          oninput: (e) => { state.depth = Number(e.target.value); spheres.get($("preview"))?.setDepth(state.depth); } })));
+    }
+    $("maps").replaceChildren(...items);
+  }
+
+  function textureSummary(a) {
+    const t = a.textures || [];
+    if (!t.length) return a.embedded_images ? a.embedded_images + " embedded" : "none embedded";
+    const sizes = new Map();
+    for (const x of t) { const k = x.width ? x.width + "×" + x.height + " " + (x.mime || "").replace("image/", "").toUpperCase() : "unknown"; sizes.set(k, (sizes.get(k) || 0) + 1); }
+    const total = t.reduce((n, x) => n + (x.bytes || 0), 0);
+    const box = el("span", {}, [...sizes].map(([k, n]) => n + " × " + k).join(", ") + (total ? " · " + bytes(total) + " of the file" : ""));
+    if (/\.glb$/i.test(a.file) && t.some((x) => x.width > 256)) box.append(" ", el("button", { type: "button", class: "small", onclick: () => openShrink(a) }, "Shrink…"));
+    return box;
+  }
+
+  function openShrink(a) {
+    const dlg = $("dlg-shrink");
+    const biggest = Math.max(...(a.textures || []).map((x) => Math.max(x.width || 0, x.height || 0)));
+    $("shrink-text").textContent = a.name + ": " + textureSummary(a).textContent.replace(" Shrink…", "") + ". File " + bytes(a.size) + ".";
+    $("shrink-size").replaceChildren(...[2048, 1024, 512, 256].filter((s) => s < biggest).map((s, i) => new Option(s + " px", String(s), i === 0, i === 0)));
+    $("shrink-jpeg").checked = false;
+    dlg.returnValue = "";
+    dlg.showModal();
+    dlg.onclose = async () => {
+      if (dlg.returnValue !== "ok") return;
+      say("Shrinking textures…");
+      const r = await call(api.shrinkTextures, a.id, Number($("shrink-size").value), $("shrink-jpeg").checked);
+      say(r.changed ? "Shrunk " + r.changed + " texture(s): " + bytes(r.before) + " → " + bytes(r.after) + ". The original stays in the version history." : "Nothing to shrink.");
+      await reload(); renderInspector(true);
+    };
+  }
+
+  // ── Large viewer with stats ──
+  function openBigView(a) {
+    const dlg = $("dlg-view");
+    $("view-title").textContent = a.name;
+    const stage = $("view-stage");
+    disposeSphere(stage);
+    if (a.kind === "model") {
+      stage.replaceChildren(el("model-viewer", { src: toUrl(state.media?.type === "model" ? state.media.file : a.file), "camera-controls": true, "auto-rotate": true,
+        "shadow-intensity": "1", exposure: "1.05", "environment-image": "neutral", "interaction-prompt": "auto", "interaction-prompt-threshold": "800", ar: false, alt: a.name }));
+    } else {
+      dlg.addEventListener("transitionend", () => {}, { once: true });
+      requestAnimationFrame(() => mountSphere(stage, a, "sphere"));
+    }
+    const stats = el("dl", { class: "meta" });
+    const add = (k, v) => { if (v !== undefined && v !== null && v !== "") stats.append(el("dt", {}, k), el("dd", {}, v)); };
+    add("Kind", a.kind === "model" ? "3D model" : "Texture set");
+    add("Categories", cats(a).join(", "));
+    if (a.kind === "model") {
+      add("Triangles", fmt.format(a.triangles || 0) + (a.source?.budget ? " (budget " + fmt.format(a.source.budget) + ")" : ""));
+      if (a.bounds) add("Size (m)", a.bounds.map((x) => x.toFixed(2)).join(" × "));
+      add("Textures", textureSummary(a).textContent.replace(" Shrink…", ""));
+    } else {
+      add("Maps", Object.keys(a.maps || {}).join(", "));
+      if (a.pixel_size) add("Pixels", a.pixel_size.join(" × "));
+    }
+    add("File size", a.size ? bytes(a.size) : "");
+    add("Tags", (a.tags || []).map((t) => "#" + t).join(" "));
+    add("Review", DECISION_LABEL[decision(a)] + ((a.review?.flags || []).length ? " · " + a.review.flags.map((f) => info.flags[f]).join("; ") : ""));
+    if (a.review?.notes) add("Notes", a.review.notes);
+    add("File", a.file);
+    $("view-stats").replaceChildren(stats);
+    dlg.showModal();
+    dlg.onclose = () => { disposeSphere(stage); stage.replaceChildren(); };
   }
 
   function renderMeta(a) {
@@ -432,7 +560,7 @@
       const budget = a.source?.budget;
       add("Triangles", fmt.format(a.triangles || 0) + (budget ? " / budget " + fmt.format(budget) : ""), budget && a.triangles > budget ? "over" : "");
       if (a.bounds) add("Size (m)", a.bounds.map((x) => x.toFixed(2)).join(" × "));
-      add("Textures", a.embedded_images ? a.embedded_images + " embedded" : "none embedded", a.embedded_images ? "" : "over");
+      add("Textures", textureSummary(a), a.embedded_images ? "" : "over");
     } else {
       add("Maps", Object.keys(a.maps || {}).join(", "));
       if (a.pixel_size) add("Pixels", a.pixel_size.join(" × "));
@@ -677,9 +805,18 @@
     $("mcp-copy").addEventListener("click", async () => { await api.copy($("mcp-json").textContent); $("mcp-copy").textContent = "Copied"; });
     $("mcp-close").addEventListener("click", () => $("dlg-mcp").close());
     $("btn-clear").addEventListener("click", confirmClearLibrary);
+    $("btn-organize").addEventListener("click", openOrganize);
+    $("org-change").addEventListener("click", async () => { const r = await call(api.organizeRoot); if (r) fillOrganize(); });
+    $("org-undo").addEventListener("click", async () => {
+      $("dlg-organize").close();
+      const r = await call(api.organizeUndo);
+      say("Undone: " + r.restored + " file operation(s) reversed.");
+      await reload();
+    });
     $("btn-export").addEventListener("click", async () => { const p = await call(api.exportLibrary); if (p) say("Exported to " + p); });
     $("query").addEventListener("input", () => { state.limit = PAGE; renderGrid(); });
     $("sort").addEventListener("change", renderGrid);
+    $("tris-filter").addEventListener("change", () => { state.limit = PAGE; renderSidebar(); renderGrid(); });
     $("zoom").addEventListener("input", () => {
       document.documentElement.style.setProperty("--card", $("zoom").value + "px");
       try { localStorage.setItem("catalogisti.zoom", $("zoom").value); } catch { /* optional */ }
@@ -705,6 +842,9 @@
       const a = selectedAsset(); if (!a) return;
       await call(api.unlinkAsset, a.id); say(a.name + " is no longer linked."); await reload(); renderInspector(false);
     });
+    $("act-expand").addEventListener("click", () => { const a = selectedAsset(); if (a) openBigView(a); });
+    $("preview").addEventListener("dblclick", () => { const a = selectedAsset(); if (a) openBigView(a); });
+    $("view-close").addEventListener("click", () => $("dlg-view").close());
     $("act-show").addEventListener("click", () => { const a = selectedAsset(); if (a) api.showInFolder(a.file); });
     $("act-replace").addEventListener("click", async () => {
       const a = selectedAsset(); if (!a) return;
@@ -754,16 +894,24 @@
   }
 
   // ── Thumbnails: rendered once per file version, cached in the data folder ──
+  const THUMB_VER = 2; // bump to re-render every thumbnail once
+
   async function thumbForModel(a) {
     const stage = $("thumb-stage");
-    const mv = el("model-viewer", { src: toUrl(a.file), "environment-image": "neutral", exposure: "1.05", "shadow-intensity": "0", "interaction-prompt": "none", "camera-orbit": "35deg 70deg auto" });
+    const src = toUrl(a.file);
+    const mv = el("model-viewer", { "environment-image": "neutral", exposure: "1.05", "shadow-intensity": "0", "interaction-prompt": "none", "camera-orbit": "35deg 70deg auto" });
     stage.replaceChildren(mv);
     await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error("timeout")), 30000);
-      mv.addEventListener("load", () => { clearTimeout(t); resolve(); }, { once: true });
+      // Only accept the load event of this exact file (a previous model can still be finishing).
+      const onLoad = () => { if (mv.src === src && mv.loaded) { clearTimeout(t); mv.removeEventListener("load", onLoad); resolve(); } };
+      mv.addEventListener("load", onLoad);
       mv.addEventListener("error", () => { clearTimeout(t); reject(new Error("load error")); }, { once: true });
+      mv.src = src;
     });
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 120))));
+    await mv.updateComplete;
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 250))));
+    if (mv.src !== src || !mv.isConnected) throw new Error("stale render");
     const blob = await mv.toBlob({ mimeType: "image/png", idealAspect: false });
     stage.replaceChildren();
     return blob;
@@ -786,14 +934,14 @@
     try {
       for (;;) {
         const visible = new Set(results().slice(0, state.limit).map((a) => a.id));
-        const todo = lib.assets.filter((a) => (!a.thumbnail || a.thumb_mtime !== a.mtime) && !thumbFailed.has(a.id))
+        const todo = lib.assets.filter((a) => (!a.thumbnail || a.thumb_mtime !== a.mtime || (a.thumb_ver || 1) < THUMB_VER) && !thumbFailed.has(a.id))
           .sort((x, y) => Number(visible.has(y.id)) - Number(visible.has(x.id)));
         const a = todo[0];
         if (!a) break;
         try {
           const blob = a.kind === "model" ? await thumbForModel(a) : await thumbForTexture(a);
-          const rel = await api.saveThumbnail(a.id, new Uint8Array(await blob.arrayBuffer()));
-          a.thumbnail = rel; a.thumb_mtime = a.mtime;
+          const rel = await api.saveThumbnail(a.id, new Uint8Array(await blob.arrayBuffer()), THUMB_VER);
+          a.thumbnail = rel; a.thumb_mtime = a.mtime; a.thumb_ver = THUMB_VER;
           const img = $("grid").querySelector('[data-id="' + CSS.escape(a.id) + '"] .thumb');
           if (img) img.replaceChildren(el("img", { src: thumbUrl(a), alt: "" }), ...[...img.querySelectorAll(".badge")]);
         } catch { thumbFailed.add(a.id); }

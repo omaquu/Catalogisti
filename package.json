@@ -1,6 +1,6 @@
 {
   "name": "catalogisti",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Catalogisti — desktop library for game 3D models and textures, with quality reviews and an MCP server for AI agents",
   "main": "main.js",
   "scripts": {
@@ -14,15 +14,37 @@
   "license": "MIT",
   "devDependencies": {
     "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron-builder": "^25.0.0",
+    "three": "^0.170.0"
   },
   "build": {
     "appId": "com.omaquu.catalogisti",
     "productName": "Catalogisti",
-    "directories": { "output": "dist" },
-    "files": ["main.js", "preload.js", "package.json", "src/**/*", "mcp/**/*"],
-    "extraResources": [{ "from": "mcp/", "to": "mcp/" }],
-    "win": { "target": ["portable"], "icon": "build/icon.ico", "signAndEditExecutable": false },
-    "portable": { "artifactName": "Catalogisti-${version}-portable.exe" }
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "src/**/*",
+      "mcp/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "mcp/",
+        "to": "mcp/"
+      }
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "Catalogisti-${version}-portable.exe"
+    }
   }
 }

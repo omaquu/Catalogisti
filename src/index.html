@@ -7,6 +7,7 @@
   <title>Catalogisti</title>
   <link rel="stylesheet" href="app.css">
   <script defer src="model-viewer.umd.js"></script>
+  <script type="module" src="texture-sphere.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
@@ -36,13 +37,21 @@
       <p class="side-heading">Popular tags</p>
       <div id="tag-cloud" class="tag-cloud"></div>
     </nav>
-    <div class="side-foot"><button id="btn-export" type="button" class="quiet">Export library JSON</button><span id="data-path"></span></div>
+    <div class="side-foot"><button id="btn-organize" type="button" class="quiet" title="Sort files into Project / Models|Textures / Category folders">Organize files into folders…</button><button id="btn-export" type="button" class="quiet">Export library JSON</button><span id="data-path"></span></div>
   </aside>
 
   <main class="main">
     <header class="toolbar">
       <div class="crumbs"><h1 id="crumb">All assets</h1><span id="count" class="pill"></span></div>
       <input id="query" type="search" placeholder="Search names, tags, notes…  (#tag works too)" aria-label="Search">
+      <select id="tris-filter" aria-label="Triangle count" title="Filter models by triangle count">
+        <option value="">Any triangles</option>
+        <option value="lt1k">Under 1,000</option>
+        <option value="1k-5k">1,000 – 5,000</option>
+        <option value="5k-20k">5,000 – 20,000</option>
+        <option value="20k-100k">20,000 – 100,000</option>
+        <option value="gt100k">Over 100,000</option>
+      </select>
       <select id="sort" aria-label="Sort">
         <option value="name">Name</option>
         <option value="recent">Recently changed</option>
@@ -64,6 +73,7 @@
       <div class="insp-head">
         <span id="insp-kind" class="kind-badge"></span>
         <input id="insp-name" class="name-input" aria-label="Asset name">
+        <button id="act-expand" type="button" class="small" title="Open a large view with all stats (or double-click the preview)" aria-label="Large view">⤢</button>
       </div>
       <div id="preview" class="preview"></div>
       <p id="preview-caption" class="preview-caption"></p>
@@ -130,6 +140,35 @@
     <input id="req-tris" type="number" min="0" step="100">
     <p class="hint">Agents see open requests through MCP (list_requests) and generate models with the Modly MCP.</p>
     <div class="dlg-foot"><button value="cancel" type="submit">Cancel</button><button value="ok" class="primary" type="submit">Create request</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-view" class="big">
+  <div class="view-head"><h2 id="view-title"></h2><button id="view-close" type="button">Close</button></div>
+  <div class="view-body"><div id="view-stage" class="view-stage"></div><aside id="view-stats" class="view-stats"></aside></div>
+</dialog>
+
+<dialog id="dlg-organize">
+  <form method="dialog">
+    <h2>Organize files into folders</h2>
+    <p>Library folder: <strong id="org-root"></strong> <button id="org-change" type="button" class="small">Change…</button></p>
+    <pre id="org-layout">&lt;Project&gt;\Models\&lt;Category&gt;\model.glb
+&lt;Project&gt;\Textures\&lt;Category&gt;\&lt;Texture&gt;\maps</pre>
+    <p id="org-plan"></p>
+    <p class="hint">Files already inside the library folder are moved. Files elsewhere (for example a shared texture library) are copied, so other projects keep working. Reviews, tags and source images stay linked. You can undo the last run.</p>
+    <div class="dlg-foot"><button id="org-undo" type="button" hidden>Undo last organize</button><button value="cancel" type="submit">Cancel</button><button value="ok" id="org-ok" class="primary" type="submit">Organize</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-shrink">
+  <form method="dialog">
+    <h2>Shrink embedded textures</h2>
+    <p id="shrink-text"></p>
+    <label for="shrink-size">Largest side</label>
+    <select id="shrink-size"></select>
+    <label class="check"><input id="shrink-jpeg" type="checkbox"> Also store PNG textures as JPEG (much smaller, no transparency)</label>
+    <p class="hint">A new file "&lt;name&gt;_1024px.glb" is written next to the original and the asset switches to it. The original file stays on disk and in the version history.</p>
+    <div class="dlg-foot"><button value="cancel" type="submit">Cancel</button><button value="ok" class="primary" type="submit">Shrink</button></div>
   </form>
 </dialog>
 

@@ -128,6 +128,43 @@ assert.ok(fs.existsSync(fixed), "deleting from the catalog keeps the file");
   console.log("visibility tests passed");
 }
 
+// Organize: files land in <root>/<Project>/Models|Textures/<Category>; outside files are copied; undo restores.
+{
+  const orgRoot = path.join(dir, "Library");
+  const inside = path.join(orgRoot, "Incoming");
+  fs.mkdirSync(inside, { recursive: true });
+  writeGlb(path.join(inside, "brass_lantern.glb"));
+  const outside = path.join(dir, "shared_textures");
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, "red_brick_wall_diff.png"), "a");
+  fs.writeFileSync(path.join(outside, "red_brick_wall_nor_gl.png"), "b");
+  store.mutate((l) => { l.settings = { library_root: orgRoot }; });
+  store.mutate((l) => store.importFolder(l, inside, { kind: "model", project: "Game" }));
+  store.mutate((l) => store.importFolder(l, outside, { kind: "texture", project: "Game" }));
+  const plan = store.planOrganize(store.load());
+  assert.ok(plan.some((o) => o.op === "move") && plan.some((o) => o.op === "copy"));
+  const res = store.mutate((l) => store.organizeLibrary(l));
+  let lo = store.load();
+  const lantern = lo.assets.find((a) => a.name === "Brass Lantern");
+  assert.strictEqual(path.dirname(lantern.file), path.join(orgRoot, "Game", "Models", lantern.categories[0]));
+  assert.ok(!fs.existsSync(path.join(inside, "brass_lantern.glb")), "inside files are moved");
+  const wall = lo.assets.find((a) => a.name === "Red Brick Wall");
+  assert.ok(wall.maps.normal.startsWith(path.join(orgRoot, "Game", "Textures")), "texture maps are copied together");
+  assert.ok(fs.existsSync(path.join(outside, "red_brick_wall_diff.png")), "outside files are only copied");
+  assert.ok(lo.projects.some((p) => p.path === path.join(orgRoot, "Game")));
+  assert.ok(res.moved >= 1 && res.copied >= 2);
+  store.mutate((l) => store.undoOrganize(l));
+  lo = store.load();
+  assert.strictEqual(lo.assets.find((a) => a.name === "Brass Lantern").file, path.join(inside, "brass_lantern.glb"));
+  assert.ok(fs.existsSync(path.join(inside, "brass_lantern.glb")), "undo moves files back");
+  assert.ok(!fs.existsSync(path.join(orgRoot, "Game", "Textures")) || !fs.readdirSync(path.join(orgRoot, "Game", "Textures"), { recursive: true }).some((f) => /\.png$/.test(f)), "undo removes copies");
+  // GLB rewrite keeps a valid file.
+  const out = path.join(dir, "rewritten.glb");
+  store.rewriteGlbImages(path.join(inside, "brass_lantern.glb"), out, () => null);
+  assert.strictEqual(store.measureGlb(out).triangles, 1);
+  console.log("organize tests passed");
+}
+
 // Sources: removing a folder drops its assets, keeps assets that also live elsewhere, and remembers reviews.
 lib = store.load();
 const srcCount = store.listSources(lib).find((x) => x.path === path.resolve(copyDir)).count;

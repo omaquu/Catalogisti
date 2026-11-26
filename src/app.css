@@ -36,7 +36,8 @@ input, select, textarea { background: #111216; border: 1px solid var(--line); bo
 .nav-item .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .nav-item .count { margin-left: auto; color: var(--subtle); font-size: 11px; }
 .nav-item.sub { padding-left: 26px; font-size: 12.5px; }
-.nav-item .caret { width: 10px; color: var(--subtle); }
+.nav-item .caret { width: 16px; color: var(--muted); text-align: center; border-radius: 3px; cursor: pointer; }
+.nav-item .caret:hover { background: #3a404b; color: #fff; }
 .tag-cloud { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 6px; }
 .tag-cloud button { font-size: 11px; padding: 2px 7px; border-radius: 10px; background: #23272e; color: var(--muted); }
 .side-heading-row { display: flex; justify-content: space-between; align-items: center; }
@@ -142,6 +143,19 @@ dialog textarea, dialog input[type=number] { width: 100%; }
 .dlg-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .hint { color: var(--muted); font-size: 11.5px; }
 pre { background: #0f1013; border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font: 11.5px/1.5 Consolas, monospace; max-height: 260px; }
+dialog.big { width: min(1400px, 96vw); height: min(900px, 92vh); padding: 14px 16px; display: none; flex-direction: column; }
+dialog.big[open] { display: flex; }
+.view-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.view-head h2 { margin: 0; }
+.view-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; }
+.view-stage { min-height: 0; border-radius: 10px; overflow: hidden; background: radial-gradient(circle at 50% 40%, #2d313a, #0f1013); }
+.view-stage model-viewer { width: 100%; height: 100%; }
+.view-stats { overflow: auto; }
+.view-stats .meta { grid-template-columns: 84px 1fr; }
+.preview canvas, .view-stage canvas { display: block; width: 100% !important; height: 100% !important; touch-action: none; }
+.maps .depth { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); margin-left: 4px; }
+.maps .depth input { width: 90px; }
+.insp-head .small { flex: none; }
 .thumb-stage { position: fixed; right: 0; bottom: 0; width: 256px; height: 256px; opacity: 0.01; pointer-events: none; z-index: -1; }
 .thumb-stage model-viewer { width: 256px; height: 256px; }
 .toggle { font-size: 12px; color: var(--muted); white-space: nowrap; }
@@ -183,3 +197,6 @@ button.small { font-size: 11px; padding: 2px 8px; }
 .dup-row .same { color: var(--good); } .dup-row .diff { color: var(--warn); }
 .side-scroll { overflow-x: hidden; }
 .nav-item > span:not(.dot):not(.count):not(.caret) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspector { overflow-x: hidden; }
+.insp-head .name-input { min-width: 0; }
+#act-expand { font-size: 15px; padding: 2px 9px; }
