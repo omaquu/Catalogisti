@@ -43,4 +43,6 @@ contextBridge.exposeInMainWorld("catalogisti", {
   copy: (text) => call("clipboard:write", text),
   exportLibrary: () => call("export:json"),
   onLibraryChanged: (fn) => ipcRenderer.on("library:changed", (_e, by) => fn(by)),
+  onGpuLost: (fn) => ipcRenderer.on("gpu:lost", (_e, reason) => fn(reason)),
+  relaunch: () => call("app:relaunch"),
 });

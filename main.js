@@ -86,6 +86,11 @@ function handle(channel, fn) {
   });
 }
 
+// If the graphics process dies, 3D views go blank: tell the window so it can offer a restart.
+app.on("child-process-gone", (_e, details) => {
+  if (details.type === "GPU" && win && !win.isDestroyed()) win.webContents.send("gpu:lost", details.reason);
+});
+
 app.whenReady().then(() => {
   protocol.handle("asset", (request) => net.fetch(pathToFileURL(urlToPath(request.url)).toString()));
   fs.mkdirSync(store.thumbsDir(), { recursive: true });
@@ -221,6 +226,13 @@ app.whenReady().then(() => {
   handle("request:create", (r) => mutate((lib) => store.createRequest(lib, r, "owner")));
   handle("request:update", (id, fields) => mutate((lib) => store.updateRequest(lib, id, fields, "owner")));
 
+  handle("app:relaunch", () => {
+    // A portable build runs from a temp copy; relaunch the real .exe the user started.
+    const exe = process.env.PORTABLE_EXECUTABLE_FILE;
+    app.relaunch(exe ? { execPath: exe, args: [] } : undefined);
+    setTimeout(() => app.exit(0), 50);
+    return true;
+  });
   handle("shell:show", (file) => shell.showItemInFolder(file));
   handle("shell:open", (file) => shell.openPath(file));
   handle("clipboard:write", (text) => clipboard.writeText(text));

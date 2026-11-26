@@ -443,6 +443,35 @@
     };
   }
 
+  // ── 3D viewer with visible loading and error states (never a silent empty box) ──
+  let gpuBroken = false;
+  function webglWorks() {
+    try { const c = document.createElement("canvas"); const g = c.getContext("webgl2") || c.getContext("webgl"); g?.getExtension("WEBGL_lose_context")?.loseContext(); return !!g; } catch { return false; }
+  }
+  function showGpuBanner(why) {
+    gpuBroken = true;
+    if (document.querySelector(".gpu-banner")) return;
+    document.body.append(el("div", { class: "gpu-banner", role: "alert" },
+      el("span", {}, "3D view stopped working (" + why + "). Restart Catalogisti to bring it back; your library is saved."),
+      el("button", { type: "button", class: "primary", onclick: () => api.relaunch() }, "Restart now"),
+      el("button", { type: "button", onclick: (e) => e.target.closest(".gpu-banner").remove() }, "Later")));
+  }
+  function modelViewer(src, attrs) {
+    const mv = el("model-viewer", { src, "camera-controls": true, "auto-rotate": true, exposure: "1.05", "environment-image": "neutral", "interaction-prompt": "auto", ...attrs });
+    const bar = el("i");
+    const status = el("div", { class: "viewer-status" }, el("span", {}, "Loading model…"), el("div", { class: "bar" }, bar));
+    const fail = (text) => {
+      status.hidden = false; status.className = "viewer-status error";
+      status.replaceChildren(el("span", {}, text), el("button", { type: "button", class: "small", onclick: () => { status.className = "viewer-status"; status.replaceChildren(el("span", {}, "Loading model…")); mv.src = ""; mv.src = src; } }, "Try again"));
+    };
+    mv.addEventListener("progress", (e) => { bar.style.width = Math.round((e.detail?.totalProgress || 0) * 100) + "%"; });
+    mv.addEventListener("load", () => { status.hidden = true; });
+    setTimeout(() => { if (mv.isConnected && !mv.loaded && status.className === "viewer-status") fail("The model has not appeared after 25 seconds. The 3D view may have stopped working: try again or restart Catalogisti."); }, 25000);
+    mv.addEventListener("error", (e) => fail("Could not open this model" + (e.detail?.type === "loadfailure" ? " (file missing or damaged)" : "") + "."));
+    if (gpuBroken || !webglWorks()) { fail("3D drawing is not available right now. Restart Catalogisti."); showGpuBanner("graphics unavailable"); }
+    return el("div", { class: "viewer" }, mv, status);
+  }
+
   function renderPreview(a) {
     const box = $("preview");
     disposeSphere(box);
@@ -452,9 +481,7 @@
       box.replaceChildren(el("a", { href: "#", title: "Open in the default viewer", onclick: (e) => { e.preventDefault(); api.openFile(m.file); } },
         el("img", { src: toUrl(m.file), alt: "Source image" })));
     } else if (a.kind === "model") {
-      const mv = el("model-viewer", { src: toUrl(m?.file || a.file), "camera-controls": true, "auto-rotate": true, "shadow-intensity": "0.8",
-        exposure: "1.05", "environment-image": "neutral", "interaction-prompt": "auto", "interaction-prompt-threshold": "1500", alt: a.name });
-      box.replaceChildren(mv);
+      box.replaceChildren(modelViewer(toUrl(m?.file || a.file), { "shadow-intensity": "0.8", "interaction-prompt-threshold": "1500", alt: a.name }));
     } else if (!m && (state.mapView === "sphere" || state.mapView === "tile")) {
       mountSphere(box, a, state.mapView);
     } else {
@@ -525,8 +552,7 @@
     const stage = $("view-stage");
     disposeSphere(stage);
     if (a.kind === "model") {
-      stage.replaceChildren(el("model-viewer", { src: toUrl(state.media?.type === "model" ? state.media.file : a.file), "camera-controls": true, "auto-rotate": true,
-        "shadow-intensity": "1", exposure: "1.05", "environment-image": "neutral", "interaction-prompt": "auto", "interaction-prompt-threshold": "800", ar: false, alt: a.name }));
+      stage.replaceChildren(modelViewer(toUrl(state.media?.type === "model" ? state.media.file : a.file), { "shadow-intensity": "1", "interaction-prompt-threshold": "800", alt: a.name }));
     } else {
       dlg.addEventListener("transitionend", () => {}, { once: true });
       requestAnimationFrame(() => mountSphere(stage, a, "sphere"));
@@ -886,6 +912,7 @@
       if (e.key === "/" && !e.target.closest("input, textarea")) { e.preventDefault(); $("query").focus(); }
       if (e.key === "Delete" && state.selected && !e.target.closest("input, textarea, select")) $("act-delete").click();
     });
+    api.onGpuLost((reason) => showGpuBanner("graphics process " + (reason || "stopped")));
     api.onLibraryChanged(async (by) => {
       await reload();
       renderInspector(false);
