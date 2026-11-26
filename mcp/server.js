@@ -165,7 +165,16 @@ function howTo(req) {
   ];
 }
 
+/** Fix paths of files whose folder was moved, so agents never get stale paths. */
+function healPaths() {
+  const lib = store.load();
+  if (!store.missingCount(lib)) return;
+  const st = store.relinkMoved(lib);
+  if (st.files || st.source_images || st.sources) store.save(lib, AGENT);
+}
+
 function call(name, a = {}) {
+  try { healPaths(); } catch { /* never block a tool call on this */ }
   switch (name) {
     case "search_assets": return store.search(store.load(), a);
     case "get_asset": {

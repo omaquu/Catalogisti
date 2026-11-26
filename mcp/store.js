@@ -299,6 +299,7 @@ function walk(root, exts, out = []) {
  */
 function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
   root = path.resolve(root);
+  const relinked = missingCount(lib) ? relinkMoved(lib, [root]) : null;
   project = project || path.basename(root);
   const added = [], skipped = [];
   const known = new Set(lib.assets.flatMap((a) => [a.file, ...(a.locations || []), ...Object.values(a.maps || {})]).filter(Boolean).map((f) => path.resolve(f).toLowerCase()));
@@ -357,7 +358,7 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
   else lib.projects.push({ name: project, path: root, kind, imported: now });
   const duplicates = findDuplicates(lib, added);
   for (const d of duplicates) lib.assets.find((x) => x.id === d.id).possible_duplicate_of = d.matches.map((m) => m.id);
-  return { added: added.length, skipped: skipped.length, ids: added, duplicates };
+  return { added: added.length, skipped: skipped.length, ids: added, duplicates, relinked };
 }
 
 /** Import tiling surface textures (walls, ground…) from a shared texture library catalog.json. */
@@ -413,7 +414,7 @@ function under(file, dir) {
 
 /** Every folder the library reads from, with how many assets each holds. Assets added one by one are grouped by project. */
 function listSources(lib) {
-  const out = lib.projects.map((p) => ({ name: p.name, path: p.path, kind: p.kind, imported: p.imported, enabled: p.enabled !== false,
+  const out = lib.projects.map((p) => ({ name: p.name, path: p.path, kind: p.kind, imported: p.imported, enabled: p.enabled !== false, missing: !exists(p.path),
     count: lib.assets.filter((a) => [a.file, ...(a.locations || [])].some((f) => under(f, p.path))).length }));
   const loose = new Map();
   for (const a of lib.assets) {
@@ -528,6 +529,97 @@ function clearLibrary(lib) {
   lib.assets = [];
   lib.projects = [];
   return { removed };
+}
+
+// ── Moved folders: find files again after a folder was moved or renamed ──
+
+function exists(p) { try { return !!p && fs.existsSync(p); } catch { return false; } }
+
+function applyPathMap(lib, p) {
+  for (const m of lib.path_map || []) if (under(p, m.from)) return path.join(m.to, path.relative(m.from, p));
+  return null;
+}
+
+/** Folders worth searching: every source folder that exists, their parents, folders the owner pointed at, and learned targets. */
+function searchRoots(lib, extra = []) {
+  const roots = new Set();
+  const add = (d) => { if (d && exists(d)) roots.add(path.resolve(d)); };
+  for (const d of extra) { add(d); add(path.dirname(d)); }
+  for (const p of lib.projects) if (exists(p.path)) { add(p.path); add(path.dirname(p.path)); add(path.dirname(path.dirname(p.path))); }
+  for (const d of lib.search_roots || []) { add(d); add(path.dirname(d)); }
+  for (const m of lib.path_map || []) add(m.to);
+  return [...roots];
+}
+
+/**
+ * Where is this (missing) file now? Tries learned folder moves first, then looks for the same trailing
+ * folder structure under the search roots: .../source_art/optimized/chair.glb is found again as
+ * <root>/optimized/chair.glb. A match on two or more path parts teaches a folder move, so every other
+ * file from the same old folder resolves instantly.
+ */
+function resolveMoved(lib, p, roots) {
+  if (!p || exists(p)) return p;
+  const mapped = applyPathMap(lib, p);
+  if (mapped && exists(mapped)) return mapped;
+  const segs = path.resolve(p).split(/[\\/]+/).filter(Boolean);
+  for (let k = Math.min(segs.length - 1, 6); k >= 1; k--) {
+    const tail = segs.slice(-k);
+    for (const r of roots) {
+      const cand = path.join(r, ...tail);
+      if (!exists(cand)) continue;
+      if (k >= 2) {
+        const from = segs.slice(0, segs.length - k).join(path.sep).replace(/^([A-Za-z]:)(?=[^\\/]|$)/, "$1" + path.sep);
+        lib.path_map = (lib.path_map || []).filter((m) => path.resolve(m.from).toLowerCase() !== path.resolve(from).toLowerCase());
+        lib.path_map.push({ from, to: r, learned: new Date().toISOString() });
+      }
+      return cand;
+    }
+  }
+  return p;
+}
+
+/** Repair every stored path (models, other locations, maps, source images, old versions, source folders). */
+function relinkMoved(lib, extraRoots = []) {
+  const roots = searchRoots(lib, extraRoots);
+  const stats = { files: 0, source_images: 0, sources: 0, still_missing: 0 };
+  if (!roots.length) return stats;
+  const fix = (p, key) => { const q = resolveMoved(lib, p, roots); if (q !== p) stats[key]++; return q; };
+  for (const pr of lib.projects) {
+    if (exists(pr.path)) continue;
+    const mapped = applyPathMap(lib, pr.path);
+    if (mapped && exists(mapped)) { pr.path = mapped; stats.sources++; }
+  }
+  for (const a of lib.assets) {
+    a.file = fix(a.file, "files");
+    if (a.locations) a.locations = a.locations.map((f) => fix(f, "files"));
+    if (a.maps) for (const k of Object.keys(a.maps)) a.maps[k] = fix(a.maps[k], "files");
+    if (a.source?.image) a.source.image = fix(a.source.image, "source_images");
+    for (const v of a.versions || []) v.file = fix(v.file, "files");
+    if (!exists(a.file)) stats.still_missing++;
+  }
+  // Sources whose folder moved resolve once a file inside them taught the move.
+  for (const pr of lib.projects) {
+    if (exists(pr.path)) continue;
+    const mapped = applyPathMap(lib, pr.path);
+    if (mapped && exists(mapped)) { pr.path = mapped; stats.sources++; }
+  }
+  // Two entries can now point at the same folder: keep one.
+  const seen = new Set();
+  lib.projects = lib.projects.filter((pr) => { const k = path.resolve(pr.path).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  return stats;
+}
+
+/** The owner points at the new place of a missing source folder. */
+function locateSource(lib, oldPath, newPath) {
+  if (!exists(newPath)) throw new Error("Folder not found: " + newPath);
+  lib.path_map = (lib.path_map || []).filter((m) => path.resolve(m.from).toLowerCase() !== path.resolve(oldPath).toLowerCase());
+  lib.path_map.push({ from: path.resolve(oldPath), to: path.resolve(newPath), learned: new Date().toISOString() });
+  lib.search_roots = [...new Set([...(lib.search_roots || []), path.resolve(newPath)])];
+  return relinkMoved(lib, [newPath]);
+}
+
+function missingCount(lib) {
+  return lib.assets.filter((a) => !exists(a.file)).length + lib.projects.filter((p) => !exists(p.path)).length;
 }
 
 function cleanSource(s) {
@@ -949,5 +1041,5 @@ module.exports = {
   setDataDir, dataDir, libraryPath, thumbsDir, load, save, mutate, emptyLibrary,
   slugify, normTag, autoTags, classifyModel, classifyTexture, measureGlb, splitMap,
   importFolder, importTextureLibrary, addAsset, replaceFile, setCategory, editTags, setReview, updateAsset,
-  listSources, setSourceEnabled, isVisible, visibleAssets, removeSource, clearLibrary, classifyModels, normalizeCategories, findDuplicates, resolveDuplicate, identicalFiles, editCategories, deleteAsset, ownedFiles, groupMembers, linkAssets, unlinkAsset, autoGroup, referencesFor, restoreVersion, findAsset, search, summary, needsFix, tagCounts, createRequest, updateRequest, completeRequest,
+  relinkMoved, locateSource, resolveMoved, missingCount, listSources, setSourceEnabled, isVisible, visibleAssets, removeSource, clearLibrary, classifyModels, normalizeCategories, findDuplicates, resolveDuplicate, identicalFiles, editCategories, deleteAsset, ownedFiles, groupMembers, linkAssets, unlinkAsset, autoGroup, referencesFor, restoreVersion, findAsset, search, summary, needsFix, tagCounts, createRequest, updateRequest, completeRequest,
 };

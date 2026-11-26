@@ -18,6 +18,7 @@ const store = require(path.join(MCP_DIR, "store.js"));
 
 let win;
 let lastOwnRevision = -1;
+let relinkNote = null;
 
 function mutate(fn) {
   const result = store.mutate(fn, "app");
@@ -91,11 +92,22 @@ app.whenReady().then(() => {
 
   // The window only sees assets of ticked sources; unticked ones keep their reviews in the file.
   handle("library:get", () => {
-    const lib = store.load();
+    // Files that moved with their folder are found again before the window sees the library.
+    let lib = store.load();
+    if (store.missingCount(lib)) {
+      const stats = store.relinkMoved(lib);
+      if (stats.files || stats.source_images || stats.sources) { store.save(lib, "app"); lastOwnRevision = lib.revision; relinkNote = stats; }
+    }
     const total = lib.assets.length;
     lib.assets = store.visibleAssets(lib);
     lib.hidden_count = total - lib.assets.length;
     return lib;
+  });
+  handle("relink:note", () => { const n = relinkNote; relinkNote = null; return n; });
+  handle("sources:locate", async (oldPath) => {
+    const { filePaths } = await dialog.showOpenDialog(win, { title: "Where is " + path.basename(oldPath) + " now?", properties: ["openDirectory"] });
+    if (!filePaths?.length) return null;
+    return mutate((lib) => store.locateSource(lib, oldPath, filePaths[0]));
   });
   handle("sources:enable", (source, enabled) => mutate((lib) => store.setSourceEnabled(lib, source, enabled)));
   handle("sources:list", () => store.listSources(store.load()));

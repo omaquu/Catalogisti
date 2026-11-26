@@ -58,6 +58,8 @@
   async function reload() {
     lib = await api.getLibrary();
     renderAll();
+    const moved = await api.relinkNote().catch(() => null);
+    if (moved) say("Found moved files again: " + moved.files + " file(s), " + moved.source_images + " source image(s)" + (moved.still_missing ? "; " + moved.still_missing + " still missing — use Locate… next to the red source." : "."));
   }
 
   // ── Filtering ──
@@ -172,7 +174,7 @@
       const generic = /^(models?|textures?|assets?|glb|export|exports|output|out|files)$/i.test(parts.at(-1) || "");
       const label = s.path ? parts.slice(generic ? -2 : -1).join("/") : s.name + " (added files)";
       const key = s.path ? { path: s.path } : { project: s.name };
-      const row = el("div", { class: "source-row" + (s.enabled ? "" : " off") },
+      const row = el("div", { class: "source-row" + (s.enabled ? "" : " off") + (s.missing ? " missing" : "") },
         el("input", { type: "checkbox", class: "src-check", checked: s.enabled, title: s.enabled ? "Untick to hide this folder's models (reviews are kept)" : "Tick to show this folder's models",
           "aria-label": "Show models from " + label, onchange: async (e) => {
             await call(api.setSourceEnabled, key, e.target.checked);
@@ -180,8 +182,14 @@
             await reload();
           } }),
         navItem(label, s.count, state.source === (s.path || s.name), () => setFilter({ source: s.path || s.name, sourcePath: s.path }), { color: s.kind === "texture" || s.kind === "texture-library" ? "#a78bfa" : "#38bdf8" }),
+        s.missing ? el("button", { class: "src-locate", type: "button", title: "This folder was moved or renamed. Show where it is now; every path inside it (models, source images) is fixed.",
+          onclick: async (e) => {
+            e.stopPropagation();
+            const r = await call(api.locateSource, s.path);
+            if (r) { say("Found again: " + r.files + " file(s), " + r.source_images + " source image(s)" + (r.still_missing ? "; " + r.still_missing + " still missing." : ".")); await reload(); }
+          } }, "Locate…") : null,
         el("button", { class: "src-x", type: "button", title: "Remove this source", "aria-label": "Remove source " + label, onclick: (e) => { e.stopPropagation(); confirmRemoveSource(s); } }, "×"));
-      row.querySelector(".nav-item").title = s.path || s.name;
+      row.querySelector(".nav-item").title = (s.missing ? "MISSING — folder moved or renamed: " : "") + (s.path || s.name);
       return row;
     }) : [el("p", { class: "hint", style: "padding:0 8px" }, "No sources yet. Use + Import.")]));
     const off = sources.filter((s) => !s.enabled);
@@ -656,7 +664,8 @@
       else if (k === "texlib") r = await call(api.importTextureLibrary, info.textureLibrary || null);
       else r = await call(api.importFolder, k);
       if (r === null) { say(""); return; }
-      say(Array.isArray(r) ? "Added " + r.length + " file(s)." : "Added " + r.added + " asset(s)" + (r.skipped ? ", " + r.skipped + " already in the library." : "."));
+      const moved = r && r.relinked && (r.relinked.files || r.relinked.source_images) ? " Re-linked " + r.relinked.files + " moved file(s) and " + r.relinked.source_images + " source image(s)." : "";
+      say((Array.isArray(r) ? "Added " + r.length + " file(s)." : "Added " + r.added + " asset(s)" + (r.skipped ? ", " + r.skipped + " already in the library." : ".")) + moved);
       await reload();
       if (r.duplicates?.length) openDupDialog(r.duplicates);
     });

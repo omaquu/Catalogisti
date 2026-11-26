@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("catalogisti", {
   getLibrary: () => call("library:get"),
   info: () => call("library:info"),
   listSources: () => call("sources:list"),
+  locateSource: (oldPath) => call("sources:locate", oldPath),
+  relinkNote: () => call("relink:note"),
   setSourceEnabled: (source, enabled) => call("sources:enable", source, enabled),
   removeSource: (source) => call("sources:remove", source),
   clearLibrary: () => call("library:clear"),
