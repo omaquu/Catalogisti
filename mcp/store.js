@@ -383,7 +383,9 @@ function walk(root, exts, out = []) {
 function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
   root = path.resolve(root);
   const relinked = missingCount(lib) ? relinkMoved(lib, [root]) : null;
-  project = project || path.basename(root);
+  // A subfolder of an existing source (e.g. Mindflower\Textures) belongs to that source's project.
+  const parent = lib.projects.find((pr) => under(root, pr.path) && path.resolve(pr.path).toLowerCase() !== root.toLowerCase());
+  project = project || parent?.name || path.basename(root);
   const added = [], skipped = [];
   const known = new Set(lib.assets.flatMap((a) => [a.file, ...(a.locations || []), ...Object.values(a.maps || {})]).filter(Boolean).map((f) => path.resolve(f).toLowerCase()));
   const now = new Date().toISOString();
@@ -444,6 +446,7 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
   }
   const existing = lib.projects.find((p) => p.path.toLowerCase() === root.toLowerCase());
   if (existing) delete existing.enabled; // importing a folder again ticks it again
+  else if (parent) delete parent.enabled; // already covered by the source above it
   else lib.projects.push({ name: project, path: root, kind, imported: now });
   const duplicates = findDuplicates(lib, added);
   for (const d of duplicates) lib.assets.find((x) => x.id === d.id).possible_duplicate_of = d.matches.map((m) => m.id);
@@ -646,7 +649,48 @@ function searchRoots(lib, extra = []) {
  * <root>/optimized/chair.glb. A match on two or more path parts teaches a folder move, so every other
  * file from the same old folder resolves instantly.
  */
-function resolveMoved(lib, p, roots) {
+/** Every file under the given folders by lower-case name (for files reorganized into new folders). */
+function fileIndex(dirs) {
+  const index = new Map(), seen = new Set();
+  let budget = 300000;
+  const walk = (d, depth) => {
+    const key = path.resolve(d).toLowerCase();
+    if (seen.has(key) || depth > 10 || budget <= 0) return;
+    seen.add(key);
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (--budget <= 0) return;
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) { if (!/^(node_modules|\.git|\.godot)$/i.test(e.name)) walk(full, depth + 1); }
+      else {
+        // Keyed by name with any "_2"-style suffix removed, so renamed copies are found too.
+        const k = e.name.toLowerCase().replace(/_\d+(\.[^.]+)$/, "$1");
+        if (!index.has(k)) index.set(k, []);
+        index.get(k).push(full);
+      }
+    }
+  };
+  for (const d of dirs) if (d && exists(d)) walk(d, 0);
+  return index;
+}
+
+/**
+ * The same file somewhere under the library. Files another asset already uses are never taken.
+ * With a known size the match must have that size; without one, only a unique exact name counts.
+ */
+function findByName(index, p, size, used) {
+  const name = path.basename(p).toLowerCase();
+  const list = (index?.get(name.replace(/_\d+(\.[^.]+)$/, "$1")) || []).filter((f) => !used?.has(path.resolve(f).toLowerCase()));
+  if (size) {
+    const same = list.filter((f) => { try { return fs.statSync(f).size === size; } catch { return false; } });
+    return same.length === 1 ? same[0] : null;
+  }
+  const exact = list.filter((f) => path.basename(f).toLowerCase() === name);
+  return exact.length === 1 ? exact[0] : null;
+}
+
+function resolveMoved(lib, p, roots, index, size, used) {
   if (!p || exists(p)) return p;
   const mapped = applyPathMap(lib, p);
   if (mapped && exists(mapped)) return mapped;
@@ -664,22 +708,30 @@ function resolveMoved(lib, p, roots) {
       return cand;
     }
   }
-  return p;
+  return findByName(index, p, size, used) || p;
 }
 
 /** Repair every stored path (models, other locations, maps, source images, old versions, source folders). */
 function relinkMoved(lib, extraRoots = []) {
   const roots = searchRoots(lib, extraRoots);
   const stats = { files: 0, source_images: 0, sources: 0, still_missing: 0 };
-  if (!roots.length) return stats;
-  const fix = (p, key) => { const q = resolveMoved(lib, p, roots); if (q !== p) stats[key]++; return q; };
+  // Files reorganized into new folders (e.g. by Organize in another copy of the library) are found by name.
+  let index = null;
+  const lazyIndex = () => (index ??= fileIndex([...new Set([...lib.projects.map((pr) => pr.path), libraryRoot(lib), ...(lib.search_roots || [])])]));
+  const used = new Set(lib.assets.filter((a) => exists(a.file)).map((a) => path.resolve(a.file).toLowerCase()));
+  const fix = (p, key, size) => {
+    if (!p || exists(p)) return p;
+    const q = resolveMoved(lib, p, roots, lazyIndex(), size, key === "files" ? used : null);
+    if (q !== p) { stats[key]++; if (key === "files") used.add(path.resolve(q).toLowerCase()); }
+    return q;
+  };
   for (const pr of lib.projects) {
     if (exists(pr.path)) continue;
     const mapped = applyPathMap(lib, pr.path);
     if (mapped && exists(mapped)) { pr.path = mapped; stats.sources++; }
   }
   for (const a of lib.assets) {
-    a.file = fix(a.file, "files");
+    a.file = fix(a.file, "files", a.size);
     if (a.locations) a.locations = a.locations.map((f) => fix(f, "files"));
     if (a.maps) for (const k of Object.keys(a.maps)) a.maps[k] = fix(a.maps[k], "files");
     if (a.source?.image) a.source.image = fix(a.source.image, "source_images");
@@ -742,16 +794,31 @@ function freeName(dir, file, taken) {
 
 /** What organizing would do: [{id, from, to, op: "move"|"copy"}] for files not already in place. */
 function planOrganize(lib, { root = libraryRoot(lib), ids } = {}) {
-  const ops = [], taken = new Set();
+  const ops = [], taken = new Set(), claimed = new Map();
   for (const a of lib.assets) {
     if (ids && !ids.includes(a.id)) continue;
     if (!exists(a.file)) continue;
-    const dir = organizeTarget(lib, a, root);
+    // A file already in the folder of any of its categories stays there (several categories, one folder).
+    const homes = cats(a).map((c) => organizeTarget(lib, { ...a, categories: [c] }, root));
+    const current = path.dirname(a.file);
+    const dir = homes.find((h) => path.resolve(h).toLowerCase() === path.resolve(current).toLowerCase()) || homes[0];
     const files = a.kind === "texture" ? [...new Set(Object.values(a.maps || {}).concat(a.file))] : [a.file];
     for (const f of files) {
       if (!exists(f)) continue;
       if (path.resolve(path.dirname(f)).toLowerCase() === path.resolve(dir).toLowerCase()) continue;
       ops.push({ id: a.id, from: f, to: freeName(dir, f, taken), op: under(f, root) ? "move" : "copy" });
+    }
+    // Source images the model was made from go into "<model>_sources" next to it.
+    if (a.kind === "model") {
+      const refDir = path.join(dir, path.basename(a.file, path.extname(a.file)) + "_sources");
+      for (const r of referencesFor(a)) {
+        const key = path.resolve(r).toLowerCase();
+        if (path.resolve(path.dirname(r)).toLowerCase() === path.resolve(refDir).toLowerCase()) continue;
+        if (claimed.has(key)) { ops.push({ id: a.id, from: r, to: claimed.get(key), op: "alias" }); continue; } // shared by variants
+        const to = freeName(refDir, r, taken);
+        claimed.set(key, to);
+        ops.push({ id: a.id, from: r, to, op: under(r, root) ? "move" : "copy" });
+      }
     }
   }
   return ops;
@@ -773,11 +840,13 @@ function organizeLibrary(lib, { root = libraryRoot(lib), ids } = {}) {
     fs.mkdirSync(path.dirname(o.to), { recursive: true });
     if (o.op === "move") {
       try { fs.renameSync(o.from, o.to); } catch { fs.copyFileSync(o.from, o.to); fs.rmSync(o.from); }
-    } else fs.copyFileSync(o.from, o.to);
+    } else if (o.op === "copy") fs.copyFileSync(o.from, o.to);
     done.push(o);
     const a = lib.assets.find((x) => x.id === o.id);
     if (a.file === o.from) { a.file = o.to; Object.assign(a, fileInfo(o.to)); }
     if (a.maps) for (const k of Object.keys(a.maps)) if (a.maps[k] === o.from) a.maps[k] = o.to;
+    if (a.source?.image === o.from) a.source.image = o.to;
+    if (a.source?.references) a.source.references = a.source.references.map((r) => (r === o.from ? o.to : r));
     a.updated = new Date().toISOString();
   }
   // Sources follow the new layout: one per project folder; folders left without assets are dropped.
@@ -800,7 +869,7 @@ function undoOrganize(lib) {
   const log = lib.organize_log;
   if (!log) throw new Error("Nothing to undo.");
   for (const o of [...log.ops].reverse()) {
-    if (!exists(o.to)) continue;
+    if (!exists(o.to) || o.op === "alias") continue;
     if (o.op === "move") { fs.mkdirSync(path.dirname(o.from), { recursive: true }); try { fs.renameSync(o.to, o.from); } catch { fs.copyFileSync(o.to, o.from); fs.rmSync(o.to); } }
     else fs.rmSync(o.to, { force: true });
   }
@@ -1122,7 +1191,7 @@ function referencesFor(a) {
   keys.add(stem);
   if (a.source?.image) keys.add(path.basename(a.source.image, path.extname(a.source.image)).toLowerCase().replace(VIEW_SUFFIX, ""));
   const dir = path.dirname(a.file);
-  const dirs = new Set([dir, path.join(dir, "references"), path.join(dir, "refs"), path.join(dir, "..", "references"), path.join(dir, "source")]);
+  const dirs = new Set([dir, path.join(dir, path.basename(a.file, path.extname(a.file)) + "_sources"), path.join(dir, "references"), path.join(dir, "refs"), path.join(dir, "..", "references"), path.join(dir, "source")]);
   if (a.source?.image) dirs.add(path.dirname(a.source.image));
   for (const d of dirs) {
     for (const img of listImages(d)) {

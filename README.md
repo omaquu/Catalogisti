@@ -27,9 +27,14 @@ and let AI agents use the same library through an MCP server.
   a before/after preview (red = removed, green = new fill). Only triangles
   change, so UVs, skin weights and rigs stay intact; the original stays in the
   version history.
+- **Moved files are found again automatically**: by folder structure, or by file
+  name and size anywhere under the library (also when another tool reorganized
+  the folders). Two models with the same file name are never mixed up.
 - **Organize files into folders**: `<Library>\<Project>\Models\<Category>` and
   `<Library>\<Project>\Textures\<Category>\<Texture>`; files outside the
   library folder are copied, inside it moved; undo available.
+  Source images move with their model into `<Category>\<model>_sources\`;
+  a file already in the folder of any of its categories stays where it is.
 - **Ready vs unapproved**: Models/Textures and the category tree list approved
   assets; everything else is under Unapproved. Filter models by triangle count.
 - **Tags**: hover a tag to delete it, `+` to add; typing suggests existing tags
