@@ -1,0 +1,33 @@
+name: Release
+
+# Push a tag like v2.0.0 to build the portable Windows exe and publish it as a GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npx electron-builder --win portable --publish never
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true
+          body: |
+            Portable Windows build of Catalogisti — no installer, just run the exe.
+            Windows may warn on first start because the exe is not code-signed.
+
+            The library is saved in `%APPDATA%\Catalogisti\library`. Click **Agents** in the app
+            to copy the MCP configuration for AI agents (needs Node.js on the PATH).
