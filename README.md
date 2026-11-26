@@ -27,6 +27,9 @@ and let AI agents use the same library through an MCP server.
   a before/after preview (red = removed, green = new fill). Only triangles
   change, so UVs, skin weights and rigs stay intact; the original stays in the
   version history.
+- **Variants**: once one variant of a linked group is approved, the unreviewed
+  others count as covered and leave the Unapproved list (marked "Variant of
+  approved"), so the same model is not approved twice.
 - **Moved files are found again automatically**: by folder structure, or by file
   name and size anywhere under the library (also when another tool reorganized
   the folders). Two models with the same file name are never mixed up.

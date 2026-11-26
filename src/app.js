@@ -48,6 +48,12 @@
   }
   function cats(a) { return a.categories?.length ? a.categories : [a.category || "Other"]; }
   function groupOf(a) { return a.group ? lib.assets.filter((x) => x.group === a.group) : [a]; }
+  /** The approved variant that makes reviewing this one unnecessary (only for still-unreviewed members). */
+  function approvedSibling(a) {
+    if (!a.group || decision(a) !== "unreviewed") return null;
+    return lib.assets.find((x) => x.group === a.group && x.id !== a.id && decision(x) === "approved") || null;
+  }
+  function awaitingReview(a) { return !ready(a) && !approvedSibling(a); }
   function base(p) { return String(p).split(/[\\/]/).pop(); }
   function say(text) { $("message").textContent = text || ""; }
 
@@ -74,11 +80,11 @@
     let list = lib.assets.filter((a) => {
       if (state.view === "models" && (a.kind !== "model" || !ready(a))) return false;
       if (state.view === "textures" && (a.kind !== "texture" || !ready(a))) return false;
-      if (state.view === "unapproved" && ready(a)) return false;
+      if (state.view === "unapproved" && !awaitingReview(a)) return false;
       if (state.view === "all" && (state.kind || state.category) && !ready(a)) return false;
       if (!trisOk(a)) return false;
       if (state.view === "needs_fix" && !needsFix(a)) return false;
-      if (state.view === "unreviewed" && decision(a) !== "unreviewed") return false;
+      if (state.view === "unreviewed" && (decision(a) !== "unreviewed" || approvedSibling(a))) return false;
       if (state.view === "approved" && decision(a) !== "approved") return false;
       if (state.view === "remove" && decision(a) !== "remove") return false;
       if (state.kind && a.kind !== state.kind) return false;
@@ -147,7 +153,7 @@
       ["all", "All assets", A.length, "#4c8dff"],
       ["models", "Models (ready)", A.filter((a) => a.kind === "model" && ready(a)).length, "#38bdf8"],
       ["textures", "Textures (ready)", A.filter((a) => a.kind === "texture" && ready(a)).length, "#a78bfa"],
-      ["unapproved", "Unapproved", A.filter((a) => !ready(a)).length, "#6b7280"],
+      ["unapproved", "Unapproved", A.filter(awaitingReview).length, "#6b7280"],
       ["needs_fix", "Needs fixing", A.filter(needsFix).length, "#e4b663"],
       ["remove", "Marked for removal", A.filter((a) => decision(a) === "remove").length, "#f0786a"],
       ["requests", "Generation requests", openReq, "#f472b6"],
@@ -411,8 +417,10 @@
       thumbUrl(x) ? el("img", { src: thumbUrl(x), alt: "" }) : el("span", { class: "ph" }),
       el("span", {}, el("span", { class: "v-name" }, x.name + (x.id === a.id ? " (this)" : "")),
         el("span", { class: "v-sub" }, (x.triangles ? fmt.format(x.triangles) + " tris · " : "") + base(x.file) + " · " + x.folder)),
-      el("span", { class: "v-dec" }, DECISION_LABEL[decision(x)])))
+      el("span", { class: "v-dec" }, approvedSibling(x) ? "Variant of approved" : DECISION_LABEL[decision(x)])))
       : [el("p", { class: "hint" }, "Not linked. Use “+ Link variant” to connect other versions of this " + a.kind + ".")]));
+    const sib = approvedSibling(a);
+    if (sib) $("variants").prepend(el("p", { class: "hint variant-settled" }, "“" + sib.name + "” in this group is approved, so this variant needs no review of its own. It stays out of Unapproved."));
   }
 
   function openLinkDialog(a) {
@@ -482,7 +490,11 @@
       box.replaceChildren(el("a", { href: "#", title: "Open in the default viewer", onclick: (e) => { e.preventDefault(); api.openFile(m.file); } },
         el("img", { src: toUrl(m.file), alt: "Source image" })));
     } else if (a.kind === "model") {
-      box.replaceChildren(modelViewer(toUrl(m?.file || a.file), { "shadow-intensity": "0.8", "interaction-prompt-threshold": "1500", alt: a.name }));
+      const view = modelViewer(toUrl(m?.file || a.file), { "shadow-intensity": "0.8", "interaction-prompt-threshold": "1500", alt: a.name });
+      box.replaceChildren(view);
+      // No current thumbnail yet: take it from this preview as soon as the model is shown.
+      const mv = view.querySelector("model-viewer");
+      if (!m && (!a.thumbnail || a.thumb_mtime !== a.mtime || (a.thumb_ver || 1) < THUMB_VER)) mv.addEventListener("load", () => thumbFromPreview(a, mv), { once: true });
     } else if (!m && (state.mapView === "sphere" || state.mapView === "tile")) {
       mountSphere(box, a, state.mapView);
     } else {
@@ -554,8 +566,14 @@
         const lines = [fmt.format(s.triangles) + " triangles in " + fmt.format(s.pieces) + " separate piece(s)."];
         if (s.fragmented) lines.push("This mesh falls apart into many small bits, so nothing is removed automatically.");
         else if (o.maxPercent) lines.push(s.loose ? "Removes " + s.loose + " loose piece(s), " + fmt.format(s.looseTriangles) + " triangles." : "No loose floating pieces found.");
-        if (o.holePercent) lines.push(s.smallHoles ? "Fills " + s.smallHoles + " small hole(s)" + (p.addedTriangles ? " with " + fmt.format(p.addedTriangles) + " triangles" : "") + "." : "No small holes found.");
-        if (s.holes > s.smallHoles) lines.push(s.holes - s.smallHoles + " larger opening(s) left open.");
+        if (o.holePercent) {
+          if (!s.holes) lines.push("The surface is closed: there are no open edges to fill. Gaps you see are dark or transparent spots in the texture, or a tunnel through the shape, which filling cannot fix.");
+          else {
+            lines.push(p.filledHoles ? "Fills " + p.filledHoles + " small hole(s) with " + fmt.format(p.addedTriangles) + " triangles." : "No small holes that can be closed cleanly.");
+            if (p.skippedHoles) lines.push(p.skippedHoles + " small hole(s) are too twisted to close cleanly and stay open.");
+            if (s.holes > s.smallHoles) lines.push(s.holes - s.smallHoles + " larger opening(s) left open (raise the size slider to include them).");
+          }
+        }
         $("clean-summary").textContent = lines.join(" ");
         $("clean-summary").className = "clean-summary" + (s.fragmented ? " warn" : "");
         $("clean-ok").disabled = !p.changed;
@@ -997,7 +1015,7 @@
     const mv = el("model-viewer", { "environment-image": "neutral", exposure: "1.05", "shadow-intensity": "0", "interaction-prompt": "none", "camera-orbit": "35deg 70deg auto" });
     stage.replaceChildren(mv);
     await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("timeout")), 30000);
+      const t = setTimeout(() => reject(new Error("timeout")), 30000 + Math.round((a.size || 0) / 1e6) * 2000); // big files load longer
       // Only accept the load event of this exact file (a previous model can still be finishing).
       const onLoad = () => { if (mv.src === src && mv.loaded) { clearTimeout(t); mv.removeEventListener("load", onLoad); resolve(); } };
       mv.addEventListener("load", onLoad);
@@ -1010,6 +1028,21 @@
     const blob = await mv.toBlob({ mimeType: "image/png", idealAspect: false });
     stage.replaceChildren();
     return blob;
+  }
+
+  async function thumbFromPreview(a, mv) {
+    try {
+      await mv.updateComplete;
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 300))));
+      if (!mv.isConnected || state.selected !== a.id) return;
+      const blob = await mv.toBlob({ mimeType: "image/png", idealAspect: false });
+      const rel = await api.saveThumbnail(a.id, new Uint8Array(await blob.arrayBuffer()), THUMB_VER);
+      a.thumbnail = rel; a.thumb_mtime = a.mtime; a.thumb_ver = THUMB_VER;
+      thumbFailed.delete(a.id);
+      const img = $("grid").querySelector('[data-id="' + CSS.escape(a.id) + '"] .thumb');
+      if (img) img.replaceChildren(el("img", { src: thumbUrl(a), alt: "" }), ...[...img.querySelectorAll(".badge")]);
+      renderVariants(a); renderMedia(a);
+    } catch { /* the background renderer will try again */ }
   }
 
   async function thumbForTexture(a) {
@@ -1030,7 +1063,7 @@
       for (;;) {
         const visible = new Set(results().slice(0, state.limit).map((a) => a.id));
         const todo = lib.assets.filter((a) => (!a.thumbnail || a.thumb_mtime !== a.mtime || (a.thumb_ver || 1) < THUMB_VER) && !thumbFailed.has(a.id))
-          .sort((x, y) => Number(visible.has(y.id)) - Number(visible.has(x.id)));
+          .sort((x, y) => Number(!y.thumbnail) - Number(!x.thumbnail) || Number(visible.has(y.id)) - Number(visible.has(x.id)));
         const a = todo[0];
         if (!a) break;
         try {

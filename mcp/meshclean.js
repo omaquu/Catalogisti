@@ -184,7 +184,7 @@ function classifyPieces(data, list, { maxPercent = 2, inside = false } = {}) {
 }
 
 /** Open boundary loops (holes) of every primitive, in fill orientation. */
-function holes(data, { maxEdges = 64 } = {}) {
+function holes(data, { maxEdges = 400 } = {}) {
   const out = [];
   for (const p of data.prims) {
     const count = new Map(); // undirected welded edge → uses
@@ -194,35 +194,43 @@ function holes(data, { maxEdges = 64 } = {}) {
       if (a === b) continue;
       const k = key(a, b); count.set(k, (count.get(k) || 0) + 1);
     }
-    const next = new Map(), real = new Map(), bad = new Set();
+    // Directed rim edges in fill orientation (b → a). A vertex may start several edges where two holes
+    // touch ("pinched"); walking edge by edge and cutting off every closed cycle splits them into simple rims.
+    const outgoing = new Map(), real = new Map();
     for (let t = 0; t < p.idx.length; t += 3) for (let e = 0; e < 3; e++) {
       const ra = p.idx[t + e], rb = p.idx[t + (e + 1) % 3];
       const a = p.weld[ra], b = p.weld[rb];
       if (a === b || count.get(key(a, b)) !== 1) continue;
-      // The filling face runs the edge the other way: b → a.
-      if (next.has(b)) bad.add(b);
-      next.set(b, a);
+      if (!outgoing.has(b)) outgoing.set(b, []);
+      outgoing.get(b).push(a);
       if (!real.has(a)) real.set(a, ra);
       if (!real.has(b)) real.set(b, rb);
     }
-    const seen = new Set();
-    for (const start of next.keys()) {
-      if (seen.has(start)) continue;
-      const loop = [];
-      let v = start, ok = true;
-      while (true) {
-        if (bad.has(v) || loop.length > maxEdges) { ok = false; break; }
-        loop.push(v); seen.add(v);
-        const n = next.get(v);
-        if (n === undefined) { ok = false; break; }
-        if (n === start) break;
-        if (seen.has(n)) { ok = false; break; }
-        v = n;
-      }
-      if (!ok || loop.length < 3) continue;
+    const emit = (loop) => {
+      if (loop.length < 3 || loop.length > maxEdges) return;
       const verts = loop.map((w) => real.get(w));
-      const box = bboxOf(p.pos, verts);
-      out.push({ prim: p, verts, welds: loop, edges: loop.length, size: bdiag(box) });
+      out.push({ prim: p, verts, welds: loop, edges: loop.length, size: bdiag(bboxOf(p.pos, verts)) });
+    };
+    for (const start of outgoing.keys()) {
+      while (outgoing.get(start)?.length) {
+        const pathV = [start], at = new Map([[start, 0]]);
+        let cur = start;
+        while (true) {
+          const list = outgoing.get(cur);
+          if (!list?.length) break; // open chain (should not happen on a valid rim): drop it
+          const nxt = list.pop();
+          if (at.has(nxt)) {
+            const i = at.get(nxt);
+            emit(pathV.slice(i));
+            for (const w of pathV.slice(i + 1)) at.delete(w);
+            pathV.length = i + 1;
+            cur = nxt;
+            if (pathV.length === 1 && !outgoing.get(cur)?.length) break;
+            continue;
+          }
+          at.set(nxt, pathV.length); pathV.push(nxt); cur = nxt;
+        }
+      }
     }
   }
   return out;
@@ -239,7 +247,12 @@ function fillable(data, loops, o) {
 }
 
 /** Ear-clip a 3D loop projected on its own plane; falls back to a fan. */
-function triangulate(pos, verts) {
+/**
+ * Ear-clip a hole rim projected on its own plane. A new diagonal must not already be a mesh edge
+ * (that would make an edge with three faces); if no clean triangulation exists, returns null.
+ */
+function triangulate(pos, verts, welds, edges) {
+  const ek = (a, b) => (a < b ? a + "_" + b : b + "_" + a);
   const P = (v) => [pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]];
   const pts = verts.map(P);
   const n = [0, 0, 0];
@@ -253,7 +266,7 @@ function triangulate(pos, verts) {
   const u = cross(ref, n), w = cross(n, u);
   const uv = pts.map((p) => [p[0] * u[0] + p[1] * u[1] + p[2] * u[2], p[0] * w[0] + p[1] * w[1] + p[2] * w[2]]);
   const area2 = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-  const idx = verts.map((_, i) => i), tris = [];
+  const idx = verts.map((_, i) => i), tris = [], newEdges = [];
   let guard = 0;
   while (idx.length > 3 && guard++ < 10000) {
     let clipped = false;
@@ -263,19 +276,20 @@ function triangulate(pos, verts) {
       if (area2(a, b, c) <= 0) continue;
       const inside = idx.some((j) => j !== ia && j !== ib && j !== ic && area2(a, b, uv[j]) >= 0 && area2(b, c, uv[j]) >= 0 && area2(c, a, uv[j]) >= 0);
       if (inside) continue;
-      tris.push(verts[ia], verts[ib], verts[ic]); idx.splice(i, 1); clipped = true; break;
+      const diag = ek(welds[ia], welds[ic]);
+      if (welds[ia] === welds[ic] || (idx.length > 3 && edges.has(diag))) continue;
+      tris.push(verts[ia], verts[ib], verts[ic]); newEdges.push(diag); idx.splice(i, 1); clipped = true; break;
     }
-    if (!clipped) { // not a simple polygon in projection: fan the rest
-      for (let i = 1; i + 1 < idx.length; i++) tris.push(verts[idx[0]], verts[idx[i]], verts[idx[i + 1]]);
-      return tris;
-    }
+    if (!clipped) return null; // no clean way to close it: leave the hole open
   }
-  if (idx.length === 3) tris.push(verts[idx[0]], verts[idx[1]], verts[idx[2]]);
+  if (idx.length !== 3) return null;
+  tris.push(verts[idx[0]], verts[idx[1]], verts[idx[2]]);
+  for (const e of newEdges) edges.add(e);
   return tris;
 }
 
 function options(o = {}) {
-  return { highlight: !!o.highlight, maxPercent: Number(o.maxPercent ?? 2), inside: !!o.inside, holePercent: Number(o.holePercent ?? 5), maxEdges: Number(o.maxEdges ?? 64) };
+  return { highlight: !!o.highlight, maxPercent: Number(o.maxPercent ?? 2), inside: !!o.inside, holePercent: Number(o.holePercent ?? 5), maxEdges: Number(o.maxEdges ?? 400) };
 }
 
 /** What a clean-up would do, without writing anything. */
@@ -306,10 +320,17 @@ function cleanGlb(file, outFile, opts) {
   const drop = new Map(); // prim → Set(triangle start)
   for (const x of list) if (x.remove) { if (!drop.has(x.prim)) drop.set(x.prim, new Set()); x.tris.forEach((t) => drop.get(x.prim).add(t)); }
   const fills = new Map();
-  let filled = 0;
+  let filled = 0, skippedHoles = 0;
   if (o.holePercent > 0) for (const h of fillable(data, holes(data, o), o)) {
+    if (!h.prim.edgeSet) {
+      h.prim.edgeSet = new Set();
+      const w = h.prim.weld, ix = h.prim.idx;
+      for (let t = 0; t < ix.length; t += 3) for (let e = 0; e < 3; e++) { const a = w[ix[t + e]], b = w[ix[t + (e + 1) % 3]]; h.prim.edgeSet.add(a < b ? a + "_" + b : b + "_" + a); }
+    }
+    const tris = triangulate(h.prim.pos, h.verts, h.welds, h.prim.edgeSet);
+    if (!tris) { skippedHoles++; continue; }
     if (!fills.has(h.prim)) fills.set(h.prim, []);
-    fills.get(h.prim).push(...triangulate(h.prim.pos, h.verts));
+    fills.get(h.prim).push(...tris);
     filled++;
   }
   let removedTris = 0, addedTris = 0, extra = [], offset = bin.length;
@@ -346,10 +367,39 @@ function cleanGlb(file, outFile, opts) {
       p.prim.indices = addIndices(f ? keep.concat(f) : keep);
     }
   }
-  if (!removedTris && !addedTris) return { removedPieces: 0, removedTriangles: 0, filledHoles: 0, addedTriangles: 0, changed: false };
+  if (!removedTris && !addedTris) return { removedPieces: 0, removedTriangles: 0, filledHoles: 0, skippedHoles: 0, addedTriangles: 0, changed: false };
   if (!gltf.buffers?.length) gltf.buffers = [{ byteLength: 0 }];
   writeGlb(outFile, gltf, Buffer.concat([bin, ...extra]));
-  return { removedPieces: list.filter((x) => x.remove).length, removedTriangles: removedTris, filledHoles: filled, addedTriangles: addedTris, changed: true };
+  return { removedPieces: list.filter((x) => x.remove).length, removedTriangles: removedTris, filledHoles: filled, skippedHoles, addedTriangles: addedTris, changed: true };
 }
 
-module.exports = { analyzeGlb, cleanGlb };
+/** Diagnostics: open edges, non-manifold edges and faces wound against their neighbours. */
+function boundaryStats(file) {
+  const { gltf, bin } = readGlb(file);
+  const data = collect(gltf, bin);
+  const out = { boundaryEdges: 0, nonManifold: 0, flippedPairs: 0, loopsAll: 0, loopsOver64: 0, loopsSmall5: 0,
+    doubleSidedMats: (gltf.materials || []).filter((m) => m.doubleSided).length, singleSidedMats: (gltf.materials || []).filter((m) => !m.doubleSided).length };
+  for (const p of data.prims) {
+    const und = new Map(), dir = new Map();
+    for (let t = 0; t < p.idx.length; t += 3) for (let e = 0; e < 3; e++) {
+      const a = p.weld[p.idx[t + e]], b = p.weld[p.idx[t + (e + 1) % 3]];
+      if (a === b) continue;
+      const k = a < b ? a + "_" + b : b + "_" + a;
+      und.set(k, (und.get(k) || 0) + 1);
+      dir.set(a + ">" + b, (dir.get(a + ">" + b) || 0) + 1);
+    }
+    for (const [k, n] of und) {
+      if (n === 1) out.boundaryEdges++;
+      else if (n > 2) out.nonManifold++;
+      else { const [a, b] = k.split("_"); if ((dir.get(a + ">" + b) || 0) === 2 || (dir.get(b + ">" + a) || 0) === 2) out.flippedPairs++; }
+    }
+  }
+  const all = holes(data, { maxEdges: 1e9 });
+  out.loopsAll = all.length;
+  out.loopsOver64 = all.filter((h) => h.edges > 64).length;
+  out.loopsSmall5 = all.filter((h) => h.size <= data.diag * 0.05).length;
+  out.edgesInLoops = all.reduce((n, h) => n + h.edges, 0);
+  return out;
+}
+
+module.exports = { analyzeGlb, cleanGlb, boundaryStats };
