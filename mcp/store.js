@@ -59,6 +59,7 @@ function load() {
   try {
     const lib = JSON.parse(fs.readFileSync(libraryPath(), "utf-8"));
     lib.assets ??= []; lib.requests ??= []; lib.projects ??= [];
+    for (const a of lib.assets) normalizeCategories(a);
     return lib;
   } catch (error) {
     if (error.code === "ENOENT") return emptyLibrary();
@@ -128,7 +129,7 @@ function autoTags(name, extra = []) {
 }
 
 const MODEL_RULES = [
-  ["Weapon parts", /pommel|grip|handle|guard|crossguard|nozzle|barrel|blade|hammer.?head|axe.?head|cartridge|regulator|bellows|scope|trigger|muzzle|weapon|sword|gun|rifle|pistol/],
+  ["Weapon parts", /pommel|grip|handle|guard|crossguard|nozzle|barrel|blade|hammer.?head|axe.?head|cartridge|regulator|bellows|scope|trigger|muzzle|weapon|sword|gun|shotgun|rifle|pistol/],
   ["Armor", /armou?r|helmet|helm|cuirass|chest|bracer|gauntlet|glove|boot|greave|pauldron|shoulder|corset|vambrace|shin|thigh/],
   ["Accessories", /backpack|pack|belt|ring|amulet|goggles|hat|cape|cloak|wings|satchel|pouch/],
   ["Enemies", /enemy|robot|automaton|boss|golem|knight/],
@@ -144,9 +145,29 @@ const MODEL_RULES = [
 ];
 
 function classifyModel(text) {
+  return classifyModels(text)[0];
+}
+
+/** Every model category whose keywords match (an asset can be Railway and Props at once), at most three. */
+function classifyModels(text, extra) {
   const t = String(text).toLowerCase().replace(/_/g, " ");
-  for (const [cat, re] of MODEL_RULES) if (re.test(t)) return cat;
-  return "Props";
+  const out = extra && MODEL_CATEGORIES.includes(extra) ? [extra] : [];
+  // Whole words only (plural allowed): "gun" must not match "burgundy", "man" not "mansard", "rock" not "rockingchair".
+  for (const [cat, re] of MODEL_RULES) if (new RegExp("\\b(?:" + re.source + ")(?:e?s)?\\b").test(t) && !out.includes(cat)) out.push(cat);
+  // Shin/thigh guards are armor, not weapon guards.
+  if (out.includes("Armor") && out.includes("Weapon parts") && !/pommel|crossguard|handguard|nozzle|blade|cartridge/.test(t)) out.splice(out.indexOf("Weapon parts"), 1);
+  return (out.length ? out : ["Props"]).slice(0, 3);
+}
+
+/** categories[] is the source of truth; category mirrors its first entry for older readers. */
+function normalizeCategories(a) {
+  let list = Array.isArray(a.categories) ? a.categories : [];
+  if (!Array.isArray(a.categories) && a.category) list = [a.category]; // older records
+  list = [...new Set(list.map((c) => String(c).trim()).filter(Boolean))];
+  if (!list.length) list = ["Other"];
+  a.categories = list;
+  a.category = list[0];
+  return a;
 }
 
 const TEXTURE_RULES = [
@@ -293,9 +314,9 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
       const folder = path.relative(root, dir).replace(/\\/g, "/") || ".";
       const m = path.extname(file).toLowerCase() === ".glb" ? measureGlb(file) : { triangles: 0, images: 0, bounds: null };
       const name = meta.name && typeof meta.name === "string" && !/^[a-z0-9_]+$/.test(meta.name) ? meta.name : prettyName(file);
-      const category = MODEL_CATEGORIES.includes(meta.category) ? meta.category : classifyModel(stem + " " + (meta.role || "") + " " + folder);
+      const categories = classifyModels(stem + " " + (meta.role || "") + " " + folder, meta.category);
       const asset = {
-        id: uniqueId(lib, stem), kind: "model", name, category,
+        id: uniqueId(lib, stem), kind: "model", name, category: categories[0], categories,
         tags: autoTags(stem, [meta.role, folder]), project, folder, file,
         triangles: m.triangles, embedded_images: m.images, bounds: m.bounds || meta.bounds_m || null,
         ...fileInfo(file),
@@ -303,6 +324,7 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
         versions: [], review: { decision: "unreviewed", flags: [], notes: "", updated: null, by: null },
         created: now, updated: now, added_by: by,
       };
+      normalizeCategories(asset);
       lib.assets.push(asset); added.push(asset.id); known.add(file.toLowerCase());
     }
   } else {
@@ -324,11 +346,14 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
         tiling: true, versions: [], review: { decision: "unreviewed", flags: [], notes: "", updated: null, by: null },
         created: now, updated: now, added_by: by,
       };
+      normalizeCategories(asset);
       lib.assets.push(asset); added.push(asset.id);
     }
   }
   if (!lib.projects.some((p) => p.path.toLowerCase() === root.toLowerCase())) lib.projects.push({ name: project, path: root, kind, imported: now });
-  return { added: added.length, skipped: skipped.length, ids: added };
+  const duplicates = findDuplicates(lib, added);
+  for (const d of duplicates) lib.assets.find((x) => x.id === d.id).possible_duplicate_of = d.matches.map((m) => m.id);
+  return { added: added.length, skipped: skipped.length, ids: added, duplicates };
 }
 
 /** Import tiling surface textures (walls, ground…) from a shared texture library catalog.json. */
@@ -392,6 +417,7 @@ function addAsset(lib, opts, by = "agent") {
     id: uniqueId(lib, (kind === "texture" ? "tex-" : "") + (opts.name || stem)), kind,
     name: opts.name || prettyName(stem),
     category: opts.category || (kind === "model" ? classifyModel(stem) : classifyTexture(stem)),
+    categories: opts.categories || (opts.category ? [opts.category] : kind === "model" ? classifyModels(stem) : [classifyTexture(stem)]),
     tags: [...new Set([...(opts.tags || []).map(normTag), ...autoTags(stem)])].filter(Boolean),
     project: opts.project || "Unsorted", folder: opts.folder || path.basename(path.dirname(file)), file,
     ...(kind === "model" ? { triangles: m.triangles || 0, embedded_images: m.images || 0, bounds: m.bounds || null } : { maps: { albedo: file, ...(opts.maps || {}) }, tiling: opts.tiling ?? true }),
@@ -400,8 +426,20 @@ function addAsset(lib, opts, by = "agent") {
     versions: [], review: { decision: "unreviewed", flags: [], notes: opts.note || "", updated: null, by: null },
     created: now, updated: now, added_by: by,
   };
-  validateCategory(asset.kind, asset.category);
+  normalizeCategories(asset);
   lib.assets.push(asset);
+  if (opts.group_with) linkAssets(lib, [opts.group_with, asset.id]);
+  const dup = findDuplicates(lib, [asset.id])[0];
+  if (dup) {
+    const same = dup.matches.find((m) => m.identical);
+    if (same) {
+      // Byte-identical file under the same name: one model in two places.
+      const kept = resolveDuplicate(lib, asset.id, same.id, "merge");
+      if (opts.request_id) completeRequest(lib, opts.request_id, kept.id, by);
+      return { ...kept, merged_into_existing: true };
+    }
+    asset.possible_duplicate_of = dup.matches.map((m) => m.id);
+  }
   if (opts.request_id) completeRequest(lib, opts.request_id, asset.id, by);
   return asset;
 }
@@ -428,14 +466,25 @@ function replaceFile(lib, id, file, note, by = "app") {
 }
 
 function validateCategory(kind, category) {
-  const list = kind === "texture" ? TEXTURE_CATEGORIES : MODEL_CATEGORIES;
-  if (!list.includes(category)) throw new Error("Unknown " + kind + " category '" + category + "'. Use one of: " + list.join(", "));
+  // Categories work like tags: the standard lists are suggestions, owners may add their own.
+  if (!category || String(category).trim().length > 40) throw new Error("A category needs a name of 1-40 characters.");
+}
+
+/** Add/remove categories like tags. Removing the last one leaves "Other". */
+function editCategories(lib, id, add = [], remove = []) {
+  const a = findAsset(lib, id);
+  for (const c of add) validateCategory(a.kind, c);
+  const rm = new Set(remove.map((c) => String(c).toLowerCase()));
+  a.categories = [...(a.categories || []).filter((c) => !rm.has(c.toLowerCase())), ...add.map((c) => String(c).trim())];
+  normalizeCategories(a);
+  a.updated = new Date().toISOString();
+  return a;
 }
 
 function setCategory(lib, id, category) {
   const a = findAsset(lib, id);
   validateCategory(a.kind, category);
-  a.category = category; a.updated = new Date().toISOString();
+  a.categories = [category]; normalizeCategories(a); a.updated = new Date().toISOString();
   return a;
 }
 
@@ -465,18 +514,213 @@ function setReview(lib, id, { decision, flags, notes, append_note } = {}, by = "
 function updateAsset(lib, id, fields) {
   const a = findAsset(lib, id);
   for (const k of ["name", "project", "folder"]) if (typeof fields[k] === "string" && fields[k].trim()) a[k] = fields[k].trim();
-  if (fields.category) { validateCategory(a.kind, fields.category); a.category = fields.category; }
+  if (Array.isArray(fields.categories) && fields.categories.length) { a.categories = fields.categories; normalizeCategories(a); }
+  else if (fields.category) { validateCategory(a.kind, fields.category); a.categories = [fields.category, ...(a.categories || []).filter((c) => c !== fields.category)]; normalizeCategories(a); }
   a.updated = new Date().toISOString();
   return a;
 }
 
-function deleteAsset(lib, id) {
-  const i = lib.assets.findIndex((a) => a.id === id);
-  if (i < 0) throw new Error("No asset with id '" + id + "'.");
-  const [removed] = lib.assets.splice(i, 1);
+/** Files that belong to one catalog entry: the model file, or every map of a texture set. Never source images. */
+function ownedFiles(a) {
+  const files = new Set([a.file, ...(a.locations || []), ...(a.kind === "texture" ? Object.values(a.maps || {}) : [])].filter(Boolean));
+  return [...files];
+}
+
+/**
+ * Remove catalog entries. wholeGroup=false removes just this one model/texture set;
+ * wholeGroup=true removes every variant linked to it. Returns the removed records.
+ */
+function deleteAsset(lib, id, { wholeGroup = false } = {}) {
+  const a = findAsset(lib, id);
+  const ids = new Set(wholeGroup && a.group ? groupMembers(lib, a).map((x) => x.id) : [id]);
+  const removed = lib.assets.filter((x) => ids.has(x.id));
+  lib.assets = lib.assets.filter((x) => !ids.has(x.id));
   lib.deleted = (lib.deleted || []).slice(-199);
-  lib.deleted.push({ id: removed.id, name: removed.name, file: removed.file, deleted: new Date().toISOString() });
+  for (const r of removed) lib.deleted.push({ id: r.id, name: r.name, file: r.file, deleted: new Date().toISOString() });
+  // A group left with a single member is no longer a group.
+  if (a.group) {
+    const rest = lib.assets.filter((x) => x.group === a.group);
+    if (rest.length === 1) delete rest[0].group;
+  }
   return removed;
+}
+
+// ── Variant groups: the same model in several versions (e.g. TripoSG and TRELLIS, raw and reduced) ──
+
+function groupMembers(lib, a) {
+  return a.group ? lib.assets.filter((x) => x.group === a.group) : [a];
+}
+
+function linkAssets(lib, ids) {
+  const assets = [...new Set(ids)].map((id) => findAsset(lib, id));
+  if (assets.length < 2) throw new Error("Link needs at least two assets.");
+  const kinds = new Set(assets.map((a) => a.kind));
+  if (kinds.size > 1) throw new Error("Only assets of the same kind (model or texture) can be linked.");
+  const group = assets.find((a) => a.group)?.group || "grp-" + assets[0].id;
+  const oldGroups = new Set(assets.map((a) => a.group).filter(Boolean));
+  for (const x of lib.assets) if (assets.includes(x) || (x.group && oldGroups.has(x.group))) { x.group = group; x.updated = new Date().toISOString(); }
+  return lib.assets.filter((x) => x.group === group);
+}
+
+function unlinkAsset(lib, id) {
+  const a = findAsset(lib, id);
+  const g = a.group;
+  delete a.group;
+  if (g) {
+    const rest = lib.assets.filter((x) => x.group === g);
+    if (rest.length === 1) delete rest[0].group;
+  }
+  return a;
+}
+
+const VARIANT_SUFFIX = /([_\-. ](v\d+|gr|game[_-]?ready|textured|texture|tex|baked|bake|optimized|optimised|opt|reduced|decimated|lod\d|final|fixed|fix|triposg|trellis\d?|hunyuan|raw|high|low|hi|lo|\d{1,2}k|copy|new|old))+$/i;
+const VIEW_SUFFIX = /[_\-. ](front|back|left|right|top|bottom|side|front45|rear45|input|source|ref|reference|view|views)\d*$/i;
+
+function variantKey(a) {
+  const stem = path.basename(a.file || "", path.extname(a.file || "")).toLowerCase();
+  return a.kind + ":" + stem.replace(VARIANT_SUFFIX, "");
+}
+
+/** Link assets that are clearly versions of one model: same base name, or made from the same source image. */
+function autoGroup(lib, onlyIds) {
+  const scope = onlyIds ? new Set(onlyIds) : null;
+  const buckets = new Map();
+  const add = (k, a) => { if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(a); };
+  for (const a of lib.assets) {
+    add("name|" + variantKey(a), a);
+    if (a.source?.image) add("src|" + a.kind + "|" + a.source.image.toLowerCase(), a);
+  }
+  let linked = 0;
+  for (const list of buckets.values()) {
+    if (list.length < 2 || list.length > 12) continue;
+    if (scope && !list.some((a) => scope.has(a.id))) continue;
+    const groups = new Set(list.map((a) => a.group || a.id));
+    if (groups.size < 2 && list.every((a) => a.group)) continue;
+    linkAssets(lib, list.map((a) => a.id));
+    linked += list.length;
+  }
+  return { linked };
+}
+
+// ── Same-name check: identical copies are merged, different files may be linked as variants ──
+
+function fileHash(file) {
+  try { return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); } catch { return null; }
+}
+
+function identicalFiles(a, b) {
+  if (!a.file || !b.file || a.size !== b.size) return false;
+  a.sha256 ??= fileHash(a.file);
+  b.sha256 ??= fileHash(b.file);
+  return !!a.sha256 && a.sha256 === b.sha256;
+}
+
+function sameNameKey(a) {
+  return a.kind + ":" + String(a.name || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** For the given (new) ids: other assets with the same name, and whether the file is byte-identical. */
+function findDuplicates(lib, ids) {
+  const byKey = new Map();
+  for (const a of lib.assets) {
+    for (const k of new Set([sameNameKey(a), variantKey(a)])) { if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push(a); }
+  }
+  const order = new Map(lib.assets.map((a, i) => [a.id, i]));
+  const fresh = new Set(ids);
+  const out = [];
+  for (const id of ids) {
+    const a = lib.assets.find((x) => x.id === id);
+    if (!a) continue;
+    const seen = new Set();
+    const matches = [];
+    for (const k of new Set([sameNameKey(a), variantKey(a)])) {
+      for (const b of byKey.get(k) || []) {
+        if (b.id === a.id || seen.has(b.id)) continue;
+        // Report each pair once: a new asset against older ones, or against new ones earlier in the batch.
+        if (fresh.has(b.id) && order.get(b.id) > order.get(a.id)) continue;
+        if ((a.not_duplicate_of || []).includes(b.id) || (b.not_duplicate_of || []).includes(a.id)) continue;
+        if (a.group && a.group === b.group) continue;
+        seen.add(b.id);
+        matches.push({ id: b.id, name: b.name, file: b.file, identical: identicalFiles(a, b) });
+      }
+    }
+    if (matches.length) out.push({ id: a.id, name: a.name, file: a.file, matches });
+  }
+  return out;
+}
+
+/**
+ * action "merge": one model in two places — keep `into`, record this file as another location, drop this entry.
+ * action "link": keep both as variants of one model. action "keep": separate assets, do not ask again.
+ */
+function resolveDuplicate(lib, id, into, action) {
+  const a = findAsset(lib, id), b = findAsset(lib, into);
+  delete a.possible_duplicate_of;
+  if (action === "link") return linkAssets(lib, [into, id]).find((x) => x.id === into);
+  if (action === "keep") {
+    a.not_duplicate_of = [...new Set([...(a.not_duplicate_of || []), into])];
+    return a;
+  }
+  if (action !== "merge") throw new Error("action must be merge, link or keep");
+  b.locations = [...new Set([...(b.locations || []), a.file, ...(a.locations || [])])].filter((f) => f !== b.file);
+  b.tags = [...new Set([...(b.tags || []), ...(a.tags || [])])];
+  b.categories = [...new Set([...(b.categories || []), ...(a.categories || [])])];
+  normalizeCategories(b);
+  if ((b.review?.decision || "unreviewed") === "unreviewed" && a.review?.decision && a.review.decision !== "unreviewed") b.review = a.review;
+  b.updated = new Date().toISOString();
+  lib.assets = lib.assets.filter((x) => x.id !== id);
+  return b;
+}
+
+// ── Source / reference images that a model was made from ──
+
+const dirCache = new Map();
+function listImages(dir) {
+  if (dirCache.has(dir)) return dirCache.get(dir);
+  let out = [];
+  try { out = fs.readdirSync(dir).filter((f) => IMAGE_EXT.has(path.extname(f).toLowerCase())).map((f) => path.join(dir, f)); } catch { /* missing */ }
+  dirCache.set(dir, out);
+  setTimeout(() => dirCache.delete(dir), 30000).unref?.();
+  return out;
+}
+
+function containsWord(hay, needle) {
+  const i = hay.indexOf(needle);
+  if (i < 0 || needle.length < 4) return false;
+  const before = hay[i - 1], after = hay[i + needle.length];
+  return (!before || !/[a-z0-9]/.test(before)) && (!after || !/[a-z]/.test(after));
+}
+
+/** Reference images for an asset: its recorded source image, the other views of it, and images named after the model. */
+function referencesFor(a) {
+  if (a.kind !== "model") return [];
+  const refs = new Set(a.source?.image && fs.existsSync(a.source.image) ? [a.source.image] : []);
+  const keys = new Set();
+  const stem = path.basename(a.file, path.extname(a.file)).toLowerCase().replace(VARIANT_SUFFIX, "");
+  keys.add(stem);
+  if (a.source?.image) keys.add(path.basename(a.source.image, path.extname(a.source.image)).toLowerCase().replace(VIEW_SUFFIX, ""));
+  const dir = path.dirname(a.file);
+  const dirs = new Set([dir, path.join(dir, "references"), path.join(dir, "refs"), path.join(dir, "..", "references"), path.join(dir, "source")]);
+  if (a.source?.image) dirs.add(path.dirname(a.source.image));
+  for (const d of dirs) {
+    for (const img of listImages(d)) {
+      const s = path.basename(img, path.extname(img)).toLowerCase();
+      if ([...keys].some((k) => s === k || containsWord(s, k))) refs.add(img);
+    }
+  }
+  return [...refs].slice(0, 24);
+}
+
+/** Make an older version current again; the current file goes into the history. */
+function restoreVersion(lib, id, index, by = "app") {
+  const a = findAsset(lib, id);
+  const v = (a.versions || [])[index];
+  if (!v) throw new Error("No version " + index + ".");
+  if (!fs.existsSync(v.file)) throw new Error("That version's file no longer exists: " + v.file);
+  a.versions.splice(index, 1);
+  replaceFile(lib, id, v.file, "Restored earlier version", by);
+  if (v.review) a.review = { ...v.review, notes: (v.review.notes ? v.review.notes + "\n" : "") + "[restored " + new Date().toISOString().slice(0, 10) + "]" };
+  return a;
 }
 
 function needsFix(a) {
@@ -486,8 +730,8 @@ function needsFix(a) {
 
 function summary(a) {
   return {
-    id: a.id, kind: a.kind, name: a.name, category: a.category, tags: a.tags, project: a.project, folder: a.folder,
-    file: a.file, triangles: a.kind === "model" ? a.triangles : undefined, maps: a.kind === "texture" ? Object.keys(a.maps || {}) : undefined,
+    id: a.id, kind: a.kind, name: a.name, categories: a.categories || [a.category], tags: a.tags, locations: a.locations?.length ? [a.file, ...a.locations] : undefined, project: a.project, folder: a.folder,
+    file: a.file, group: a.group || undefined, triangles: a.kind === "model" ? a.triangles : undefined, maps: a.kind === "texture" ? Object.keys(a.maps || {}) : undefined,
     review: a.review?.decision || "unreviewed", flags: a.review?.flags || [], notes: a.review?.notes || "",
   };
 }
@@ -498,14 +742,14 @@ function search(lib, q = {}) {
   const anyTags = (q.any_tags || []).map(normTag).filter(Boolean);
   let list = lib.assets.filter((a) => {
     if (q.kind && q.kind !== "all" && a.kind !== q.kind.replace(/s$/, "")) return false;
-    if (q.category && a.category.toLowerCase() !== String(q.category).toLowerCase()) return false;
+    if (q.category && !(a.categories || [a.category]).some((c) => c.toLowerCase() === String(q.category).toLowerCase())) return false;
     if (q.project && a.project !== q.project) return false;
     if (q.review && (a.review?.decision || "unreviewed") !== q.review) return false;
     if (q.needs_fix && !needsFix(a)) return false;
     if (want.length && !want.every((t) => a.tags.includes(t))) return false;
     if (anyTags.length && !anyTags.some((t) => a.tags.includes(t))) return false;
     if (words.length) {
-      const hay = [a.id, a.name, a.category, a.project, a.folder, ...(a.tags || []), a.review?.notes].join(" ").toLowerCase();
+      const hay = [a.id, a.name, ...(a.categories || [a.category]), a.project, a.folder, ...(a.tags || []), a.review?.notes].join(" ").toLowerCase();
       if (!words.every((w) => hay.includes(w))) return false;
     }
     return true;
@@ -571,5 +815,5 @@ module.exports = {
   setDataDir, dataDir, libraryPath, thumbsDir, load, save, mutate, emptyLibrary,
   slugify, normTag, autoTags, classifyModel, classifyTexture, measureGlb, splitMap,
   importFolder, importTextureLibrary, addAsset, replaceFile, setCategory, editTags, setReview, updateAsset,
-  deleteAsset, findAsset, search, summary, needsFix, tagCounts, createRequest, updateRequest, completeRequest,
+  classifyModels, normalizeCategories, findDuplicates, resolveDuplicate, identicalFiles, editCategories, deleteAsset, ownedFiles, groupMembers, linkAssets, unlinkAsset, autoGroup, referencesFor, restoreVersion, findAsset, search, summary, needsFix, tagCounts, createRequest, updateRequest, completeRequest,
 };

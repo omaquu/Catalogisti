@@ -46,6 +46,7 @@
         <option value="tris">Most triangles</option>
         <option value="review">Needs attention first</option>
       </select>
+      <label class="check toggle" title="Show each set of linked variants as one card"><input id="group-toggle" type="checkbox"> Group variants</label>
       <input id="zoom" type="range" min="120" max="320" value="180" aria-label="Card size">
     </header>
     <div id="chips" class="chips" hidden></div>
@@ -62,16 +63,27 @@
         <input id="insp-name" class="name-input" aria-label="Asset name">
       </div>
       <div id="preview" class="preview"></div>
+      <p id="preview-caption" class="preview-caption"></p>
       <div id="maps" class="maps"></div>
-      <div class="field-row">
-        <label for="insp-category">Category</label>
-        <select id="insp-category"></select>
+      <div id="media-wrap" class="field" hidden>
+        <span class="label">Made from &amp; versions — click to view</span>
+        <div id="media" class="media-strip"></div>
+      </div>
+      <div id="dup-banner" class="dup-banner" hidden></div>
+      <div class="field">
+        <span class="label">Categories</span>
+        <div id="cats" class="tags"></div>
       </div>
       <div class="field">
         <span class="label">Tags</span>
         <div id="tags" class="tags"></div>
       </div>
       <dl id="meta" class="meta"></dl>
+      <div class="field variants-box">
+        <div class="variants-head"><span class="label" id="variants-label">Variants of the same model</span>
+          <span><button id="act-link" type="button" class="small">+ Link variant…</button> <button id="act-unlink" type="button" class="small" hidden>Unlink</button></span></div>
+        <div id="variants" class="variants"></div>
+      </div>
       <div class="actions">
         <button id="act-show" type="button">Show in folder</button>
         <button id="act-replace" type="button" title="Swap to a corrected file; the old one stays in the version history">Replace with fixed version…</button>
@@ -83,9 +95,9 @@
         <div id="flags" class="flags"></div>
         <label for="notes">Notes (agents read these)</label>
         <textarea id="notes" rows="4" maxlength="8000" placeholder="What needs fixing? e.g. torn cheek plate, scale too large, texture seam on the back…"></textarea>
-        <div class="review-foot"><button class="primary" type="submit">Save review</button><span id="saved" role="status"></span></div>
+        <div class="review-foot"><span id="saved" role="status">Changes save automatically</span></div>
       </form>
-      <details id="versions" class="versions" hidden><summary>Version history</summary><ol id="version-list"></ol></details>
+
       <button id="act-delete" class="danger" type="button">Delete asset…</button>
     </div>
   </aside>
@@ -95,9 +107,13 @@
 
 <dialog id="dlg-delete">
   <form method="dialog">
-    <h2>Delete asset?</h2>
-    <p id="del-text"></p>
-    <label class="check"><input id="del-trash" type="checkbox"> Also move the file to the Recycle Bin</label>
+    <h2>Delete from the catalog?</h2>
+    <div id="del-scope" class="del-scope"></div>
+    <p class="label">These catalog entries are removed:</p>
+    <ul id="del-list" class="del-list"></ul>
+    <label class="check"><input id="del-trash" type="checkbox"> Also move their files to the Recycle Bin</label>
+    <ul id="del-files" class="del-list files" hidden></ul>
+    <p class="hint">Source and reference images are never deleted. Without the box ticked, every file stays on disk and can be imported again.</p>
     <div class="dlg-foot"><button value="cancel" type="submit">Cancel</button><button value="ok" class="danger" type="submit">Delete</button></div>
   </form>
 </dialog>
@@ -111,6 +127,25 @@
     <input id="req-tris" type="number" min="0" step="100">
     <p class="hint">Agents see open requests through MCP (list_requests) and generate models with the Modly MCP.</p>
     <div class="dlg-foot"><button value="cancel" type="submit">Cancel</button><button value="ok" class="primary" type="submit">Create request</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-dups">
+  <form method="dialog">
+    <h2>Same name already in the library</h2>
+    <p class="hint">Identical files are the same model in another folder: merge keeps one asset with both locations. Different files can be linked as versions of one model.</p>
+    <div id="dups-list" class="dups-list"></div>
+    <div class="dlg-foot"><button value="cancel" type="submit">Decide later</button><button value="ok" class="primary" type="submit">Apply</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-link">
+  <form method="dialog">
+    <h2 id="link-title">Link variants</h2>
+    <p class="hint">Pick the other versions of this model (e.g. TripoSG and TRELLIS results, raw and reduced, old and fixed).</p>
+    <input id="link-query" type="search" placeholder="Search by name or tag…" autocomplete="off">
+    <div id="link-list" class="link-list"></div>
+    <div class="dlg-foot"><button value="cancel" type="submit">Cancel</button><button value="ok" class="primary" type="submit">Link selected</button></div>
   </form>
 </dialog>
 

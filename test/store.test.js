@@ -72,7 +72,31 @@ assert.strictEqual(h2.versions.length, 1);
 assert.strictEqual(h2.versions[0].review.decision, "needs_fix");
 assert.strictEqual(h2.review.decision, "unreviewed");
 
-assert.throws(() => store.mutate((l) => store.setCategory(l, helmet.id, "Walls")), /Unknown model category/);
+// Categories work like tags: several per asset, custom names allowed, the last one removed leaves "Other".
+store.mutate((l) => store.editCategories(l, helmet.id, ["Railway", "Props"], ["Armor"]));
+lib = store.load();
+assert.deepStrictEqual(store.findAsset(lib, helmet.id).categories, ["Railway", "Props"]);
+assert.strictEqual(store.search(lib, { category: "props" }).results.some((r) => r.id === helmet.id), true);
+store.mutate((l) => store.editCategories(l, helmet.id, [], ["Railway", "Props"]));
+assert.deepStrictEqual(store.findAsset(store.load(), helmet.id).categories, ["Other"]);
+assert.throws(() => store.mutate((l) => store.editCategories(l, helmet.id, [""], [])), /1-40/);
+assert.deepStrictEqual(store.classifyModels("rail luggage trolley crate"), ["Railway", "Props"]);
+
+// Same name in another folder: identical file is offered as a merge, a different file as a variant.
+const copyDir = path.join(dir, "copy");
+fs.mkdirSync(copyDir);
+fs.copyFileSync(path.join(src, "brass_pommel.glb"), path.join(copyDir, "brass_pommel.glb"));
+writeGlb(path.join(copyDir, "iron_helmet_v2.glb"));
+fs.appendFileSync(path.join(copyDir, "iron_helmet_v2.glb"), "different");
+r = store.mutate((l) => store.importFolder(l, copyDir, { kind: "model", project: "Copy" }));
+const pommelDup = r.duplicates.find((d) => d.name === "Brass Pommel");
+assert.ok(pommelDup && pommelDup.matches[0].identical, "identical copy detected");
+lib = store.load();
+assert.ok(store.findAsset(lib, pommelDup.id).possible_duplicate_of.length);
+const merged = store.mutate((l) => store.resolveDuplicate(l, pommelDup.id, pommelDup.matches[0].id, "merge"));
+assert.deepStrictEqual(merged.locations, [path.join(copyDir, "brass_pommel.glb")]);
+assert.strictEqual(store.load().assets.filter((a) => a.name === "Brass Pommel").length, 1);
+assert.ok(store.ownedFiles(merged).length === 2, "both locations belong to the merged asset");
 const req = store.mutate((l) => store.createRequest(l, { kind: "texture", prompt: "lava ground", category: "Ground" }));
 const added = store.mutate((l) => store.addAsset(l, { file: path.join(src, "dirt_ground.png"), name: "Lava", request_id: req.id, tags: ["lava"] }));
 lib = store.load();

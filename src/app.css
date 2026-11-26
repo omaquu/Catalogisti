@@ -44,7 +44,7 @@ input, select, textarea { background: #111216; border: 1px solid var(--line); bo
 
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-.crumbs { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; }
+.crumbs { display: flex; align-items: baseline; gap: 8px; min-width: 150px; flex: 1; }
 .crumbs h1 { font-size: 16px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pill { color: var(--muted); font-size: 11px; background: var(--panel2); border-radius: 10px; padding: 1px 8px; }
 #query { width: min(360px, 34vw); }
@@ -132,3 +132,40 @@ dialog textarea, dialog input[type=number] { width: 100%; }
 pre { background: #0f1013; border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font: 11.5px/1.5 Consolas, monospace; max-height: 260px; }
 .thumb-stage { position: fixed; right: 0; bottom: 0; width: 256px; height: 256px; opacity: 0.01; pointer-events: none; z-index: -1; }
 .thumb-stage model-viewer { width: 256px; height: 256px; }
+.toggle { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.preview-caption { margin: 4px 0 0; font-size: 11px; color: var(--muted); min-height: 14px; }
+.media-strip { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 2px; }
+.media-strip button { flex: none; width: 72px; padding: 0; overflow: hidden; display: flex; flex-direction: column; background: #111216; }
+.media-strip button img { width: 72px; height: 72px; object-fit: cover; display: block; background: #1f2228; }
+.media-strip button span { font-size: 9.5px; color: var(--muted); padding: 2px 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.media-strip button[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.media-strip .ph3d { width: 72px; height: 72px; display: grid; place-items: center; color: var(--subtle); font-size: 18px; }
+.variants-box { border-top: 1px solid var(--line); padding-top: 10px; }
+.variants-head { display: flex; justify-content: space-between; align-items: center; }
+button.small { font-size: 11px; padding: 2px 8px; }
+.variants { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.variant { display: flex; align-items: center; gap: 8px; text-align: left; padding: 4px; }
+.variant img, .variant .ph { width: 40px; height: 40px; object-fit: contain; flex: none; background: #111216; border-radius: 4px; }
+.variant .v-name { font-size: 12px; } .variant .v-sub { font-size: 10.5px; color: var(--muted); display: block; }
+.variant .v-dec { margin-left: auto; font-size: 10px; color: var(--muted); }
+.variant.current { border-color: var(--accent); }
+.variants .hint { margin: 2px 0; }
+.version-row { display: flex; gap: 6px; align-items: center; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+.del-scope { display: flex; flex-direction: column; gap: 4px; }
+.del-scope label { display: flex; gap: 8px; align-items: center; }
+.del-list { margin: 0; padding-left: 18px; max-height: 150px; overflow: auto; font-size: 12px; }
+.del-list.files { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.link-list { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
+.link-list label { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 5px; }
+.link-list label:hover { background: #262a31; }
+.link-list img { width: 36px; height: 36px; object-fit: contain; background: #111216; border-radius: 4px; }
+.link-list small { color: var(--muted); }
+.badge.group { left: auto; right: 6px; color: #9cc0ff; }
+#saved.saving { color: var(--muted); } #saved.error { color: var(--bad); }
+.tag.cat { background: #2c2a40; border-color: #4a4370; color: #d4c9ff; }
+.dup-banner { margin-top: 10px; padding: 9px 10px; border: 1px solid #6b5a2e; background: #2c2617; border-radius: 8px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+.dup-banner .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.dups-list { display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow: auto; }
+.dup-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.dup-row small { color: var(--muted); overflow-wrap: anywhere; display: block; }
+.dup-row .same { color: var(--good); } .dup-row .diff { color: var(--warn); }

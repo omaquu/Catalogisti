@@ -19,11 +19,24 @@ and let AI agents use the same library through an MCP server.
 - **3D preview** (model-viewer) and cached thumbnails rendered on import.
 - **Tags**: hover a tag to delete it, `+` to add; typing suggests existing tags
   (`i` → `#iron`, `#item`). Click a tag in the sidebar to filter, or search `#tag`.
-- **Quality review**: Approved / Needs fix / Regenerate / Remove, problem flags
-  (reduce triangles, duplicate, texture, scale, broken mesh) and notes that agents read.
+- **Categories work like tags**: an asset can be in several (e.g. Railway and
+  Props); add, remove or invent categories with the same chip editor.
+- **Quality review** saves itself as you click or type: Approved / Needs fix /
+  Regenerate / Remove, problem flags (reduce triangles, duplicate, texture,
+  scale, broken mesh) and notes that agents read.
+- **Made from & versions**: the source images the model was generated from
+  (front, back, side views…) and every earlier version, viewable in the preview;
+  restore an earlier version with one click.
+- **Variants**: link versions of the same model (TripoSG and TRELLIS results,
+  raw and reduced, old and fixed); "Group variants" shows each set as one card.
+- **Same-name check**: importing a model whose name already exists asks what to
+  do. Byte-identical files are merged into one asset with both locations;
+  different files can be linked as variants or kept apart.
 - **Replace with fixed version**: swaps the file, keeps the old file and its
   review in the version history.
-- **Delete** an asset at any time (optionally moving the file to the Recycle Bin).
+- **Delete** removes one model or texture set from the catalog, or, if it is
+  linked, optionally all its variants. Files stay on disk unless you tick
+  "move to Recycle Bin"; source images are never deleted.
 - **Generation requests**: ask for a new asset or a fixed version; agents pick
   them up through MCP.
 - Everything is saved immediately to one file, `library.json`, in
@@ -68,7 +81,8 @@ Node.js must be on the PATH. Tools:
 | `find_or_request` | Find a usable asset for a need; if none, open a request with instructions |
 | `list_tags`, `list_categories` | Reuse existing tags and categories |
 | `set_review` | Decision, flags, notes, or `append_note` for a dated finding |
-| `edit_tags`, `update_asset` | Tag, rename, recategorise |
+| `edit_tags`, `edit_categories`, `update_asset` | Tag, categorise (several categories allowed), rename |
+| `link_variants`, `unlink_variant`, `resolve_duplicate` | Variant groups and same-name pairs (merge / link / keep) |
 | `add_asset` | Register a generated GLB or texture (`request_id`, or `replaces` for a fixed version) |
 | `request_asset`, `list_requests`, `update_request` | Generation work queue |
 | `delete_asset` | Remove from the catalog (the file stays on disk) |

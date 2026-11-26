@@ -39,7 +39,7 @@ const TOOLS = [
   },
   {
     name: "get_asset",
-    description: "Full record of one asset: file path, PBR maps, triangles, bounds, source image/prompt, previous versions and the complete quality review with notes.",
+    description: "Full record of one asset: file path, PBR maps, triangles, bounds, source image/prompt, reference images (the pictures it was made from), linked variants, previous versions and the complete quality review with notes.",
     inputSchema: { type: "object", properties: { id: str("Asset id") }, required: ["id"] },
   },
   {
@@ -78,23 +78,43 @@ const TOOLS = [
   },
   {
     name: "update_asset",
-    description: "Rename an asset or change its category, project or folder.",
-    inputSchema: { type: "object", properties: { id: str("Asset id"), name: str("New name"), category: str("New category"), project: str("Project"), folder: str("Folder") }, required: ["id"] },
+    description: "Rename an asset, replace its categories, or change its project or folder.",
+    inputSchema: { type: "object", properties: { id: str("Asset id"), name: str("New name"), categories: arr("Replaces all categories"), category: str("Make this the main category"), project: str("Project"), folder: str("Folder") }, required: ["id"] },
   },
   {
     name: "add_asset",
-    description: "Register a model (.glb/.gltf) or texture image you created. Triangles and bounds are measured from the GLB. Pass request_id to close the request it fulfils, or replaces=<asset id> to swap an existing asset to this fixed file (the old file stays in its version history).",
+    description: "Register a model (.glb/.gltf) or texture image you created. Triangles and bounds are measured from the GLB. A byte-identical file with the same name is merged into the existing asset; a different file with the same name comes back with possible_duplicate_of — then call resolve_duplicate. Pass request_id to close the request it fulfils, or replaces=<asset id> to swap an existing asset to this fixed file (the old file stays in its version history).",
     inputSchema: { type: "object", properties: {
       file: str("Absolute path of the file"), kind: { type: "string", enum: ["model", "texture"] }, name: str("Display name"),
-      category: str("Category"), tags: arr("Tags"), project: str("Project"), folder: str("Folder label"),
+      category: str("Main category"), categories: arr("All categories (an asset can be in several)"), tags: arr("Tags"), project: str("Project"), folder: str("Folder label"),
       maps: { type: "object", description: "Texture maps by type: {normal, roughness, metallic, ao, height, orm} → absolute paths" },
       source_image: str("Source/reference image used for generation"), prompt: str("Generation prompt"), tool: str("Tool, e.g. Modly TripoSG"),
-      run_ids: arr("Generation job ids"), request_id: str("Request this fulfils"), replaces: str("Asset id this file replaces"), note: str("Note"),
+      run_ids: arr("Generation job ids"), request_id: str("Request this fulfils"), replaces: str("Asset id this file replaces"), group_with: str("Link the new asset as a variant of this asset id"), note: str("Note"),
     }, required: ["file"] },
   },
   {
     name: "delete_asset",
-    description: "Remove an asset from the catalog (the file on disk is not deleted). Only do this when the owner asked or the asset is marked remove.",
+    description: "Remove one model or texture set from the catalog (files on disk are not deleted). whole_group also removes every linked variant. Only do this when the owner asked or the asset is marked remove.",
+    inputSchema: { type: "object", properties: { id: str("Asset id"), whole_group: { type: "boolean", description: "Also remove all linked variants" } }, required: ["id"] },
+  },
+  {
+    name: "edit_categories",
+    description: "Add and/or remove categories. An asset can be in several (e.g. Railway and Props). Standard names are in list_categories; new ones are allowed.",
+    inputSchema: { type: "object", properties: { id: str("Asset id"), add: arr("Categories to add"), remove: arr("Categories to remove") }, required: ["id"] },
+  },
+  {
+    name: "resolve_duplicate",
+    description: "Settle a same-name pair (see possible_duplicate_of on an asset): merge = byte-identical file in another folder, kept as one asset with an extra location; link = different files that are versions of one model; keep = genuinely different assets.",
+    inputSchema: { type: "object", properties: { id: str("Asset that duplicates another"), into: str("The existing asset"), action: { type: "string", enum: ["merge", "link", "keep"] } }, required: ["id", "into", "action"] },
+  },
+  {
+    name: "link_variants",
+    description: "Link assets that are versions of the same model or texture (e.g. TripoSG and TRELLIS results, raw and reduced, old and fixed).",
+    inputSchema: { type: "object", properties: { ids: arr("Asset ids to link (at least two)") }, required: ["ids"] },
+  },
+  {
+    name: "unlink_variant",
+    description: "Take an asset out of its variant group.",
     inputSchema: { type: "object", properties: { id: str("Asset id") }, required: ["id"] },
   },
   {
@@ -142,7 +162,19 @@ function howTo(req) {
 function call(name, a = {}) {
   switch (name) {
     case "search_assets": return store.search(store.load(), a);
-    case "get_asset": return store.findAsset(store.load(), a.id);
+    case "get_asset": {
+      const lib = store.load();
+      const asset = store.findAsset(lib, a.id);
+      return { ...asset, reference_images: store.referencesFor(asset),
+        variants: store.groupMembers(lib, asset).filter((x) => x.id !== asset.id).map(store.summary) };
+    }
+    case "edit_categories": return store.summary(store.mutate((lib) => store.editCategories(lib, a.id, a.add || [], a.remove || []), AGENT));
+    case "resolve_duplicate": {
+      const r = store.mutate((lib) => store.resolveDuplicate(lib, a.id, a.into, a.action), AGENT);
+      return Array.isArray(r) ? r.map(store.summary) : store.summary(r);
+    }
+    case "link_variants": return store.mutate((lib) => store.linkAssets(lib, a.ids || []), AGENT).map(store.summary);
+    case "unlink_variant": return store.summary(store.mutate((lib) => store.unlinkAsset(lib, a.id), AGENT));
     case "list_tags": return store.tagCounts(store.load(), a).slice(0, 200);
     case "list_categories": {
       const lib = store.load();
@@ -168,8 +200,8 @@ function call(name, a = {}) {
     case "update_asset": return store.summary(store.mutate((lib) => store.updateAsset(lib, a.id, a), AGENT));
     case "add_asset": return store.summary(store.mutate((lib) => store.addAsset(lib, a, AGENT), AGENT));
     case "delete_asset": {
-      const removed = store.mutate((lib) => store.deleteAsset(lib, a.id), AGENT);
-      return { deleted: removed.id, file_kept_on_disk: removed.file };
+      const removed = store.mutate((lib) => store.deleteAsset(lib, a.id, { wholeGroup: !!a.whole_group }), AGENT);
+      return { deleted: removed.map((r) => r.id), files_kept_on_disk: removed.flatMap(store.ownedFiles) };
     }
     case "request_asset": {
       const req = store.mutate((lib) => store.createRequest(lib, a, AGENT), AGENT);

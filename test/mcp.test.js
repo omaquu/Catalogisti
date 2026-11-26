@@ -42,7 +42,7 @@ const tool = async (name, args) => {
   const empty = await tool("find_or_request", { kind: "texture", tags: ["rust", "metal"], category: "Metal", name: "Rusty plate" });
   assert.ok(empty.value.request && empty.value.next_steps.length > 0, "nothing found → request opened");
   const added = await tool("add_asset", { file: img, kind: "texture", tags: ["rust"], request_id: empty.value.request.id });
-  assert.strictEqual(added.value.category, "Metal");
+  assert.deepStrictEqual(added.value.categories, ["Metal"]);
   const found = await tool("find_or_request", { kind: "texture", tags: ["rust"] });
   assert.strictEqual(found.value.matches[0].id, added.value.id);
   assert.strictEqual(found.value.request, null);

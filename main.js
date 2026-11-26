@@ -119,13 +119,26 @@ app.whenReady().then(() => {
 
   handle("asset:update", (id, fields) => mutate((lib) => store.updateAsset(lib, id, fields)));
   handle("asset:tags", (id, add, remove) => mutate((lib) => store.editTags(lib, id, add, remove)));
+  handle("asset:categories", (id, add, remove) => mutate((lib) => store.editCategories(lib, id, add, remove)));
+  handle("asset:resolveDuplicate", (id, into, action) => mutate((lib) => store.resolveDuplicate(lib, id, into, action)));
   handle("asset:review", (id, review) => mutate((lib) => store.setReview(lib, id, review, "owner")));
-  handle("asset:delete", async (id, trashFile) => {
-    const removed = mutate((lib) => store.deleteAsset(lib, id));
-    if (trashFile && removed.file && fs.existsSync(removed.file)) await shell.trashItem(removed.file);
-    if (removed.thumbnail) fs.rmSync(path.join(store.dataDir(), removed.thumbnail), { force: true });
-    return removed.id;
+  handle("asset:delete", async (id, { trashFiles = false, wholeGroup = false } = {}) => {
+    const removed = mutate((lib) => store.deleteAsset(lib, id, { wholeGroup }));
+    // Files still used by another catalog entry are never trashed; source images are never touched.
+    const stillUsed = new Set(store.load().assets.flatMap(store.ownedFiles).map((f) => f.toLowerCase()));
+    const trashed = [];
+    for (const r of removed) {
+      if (trashFiles) for (const f of store.ownedFiles(r)) {
+        if (!stillUsed.has(f.toLowerCase()) && fs.existsSync(f)) { await shell.trashItem(f); trashed.push(f); }
+      }
+      if (r.thumbnail) fs.rmSync(path.join(store.dataDir(), r.thumbnail), { force: true });
+    }
+    return { removed: removed.map((r) => r.id), trashed };
   });
+  handle("asset:link", (ids) => mutate((lib) => store.linkAssets(lib, ids).map((a) => a.id)));
+  handle("asset:unlink", (id) => mutate((lib) => store.unlinkAsset(lib, id)));
+  handle("asset:references", (id) => store.referencesFor(store.findAsset(store.load(), id)));
+  handle("asset:restoreVersion", (id, index) => mutate((lib) => store.restoreVersion(lib, id, index, "owner")));
   handle("asset:replace", async (id) => {
     const lib = store.load();
     const a = store.findAsset(lib, id);
