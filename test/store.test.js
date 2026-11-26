@@ -108,6 +108,26 @@ lib = store.load();
 assert.ok(!lib.assets.some((a) => a.id === helmet.id));
 assert.ok(fs.existsSync(fixed), "deleting from the catalog keeps the file");
 
+// Unticking a source hides its assets everywhere but keeps them and their reviews.
+{
+  const one = store.load().assets.find((a) => a.file.startsWith(path.resolve(copyDir)) && !(a.locations || []).length);
+  store.mutate((l) => store.setReview(l, one.id, { notes: "remember me" }));
+  store.mutate((l) => store.setSourceEnabled(l, { path: copyDir }, false));
+  let l2 = store.load();
+  assert.ok(!store.isVisible(l2, store.findAsset(l2, one.id)), "unticked source is hidden");
+  assert.ok(!store.search(l2, { limit: 200 }).results.some((r) => r.id === one.id), "search skips hidden assets");
+  assert.ok(store.search(l2, { limit: 200, include_hidden: true }).results.some((r) => r.id === one.id));
+  assert.strictEqual(store.listSources(l2).find((x) => x.path === path.resolve(copyDir)).enabled, false);
+  store.mutate((l) => store.setSourceEnabled(l, { path: copyDir }, true));
+  l2 = store.load();
+  assert.ok(store.isVisible(l2, store.findAsset(l2, one.id)));
+  assert.strictEqual(store.findAsset(l2, one.id).review.notes, "remember me");
+  store.mutate((l) => store.setSourceEnabled(l, { path: copyDir }, false));
+  store.mutate((l) => store.importFolder(l, copyDir, { kind: "model", project: "Copy" }));
+  assert.strictEqual(store.listSources(store.load()).find((x) => x.path === path.resolve(copyDir)).enabled, true, "importing again ticks it");
+  console.log("visibility tests passed");
+}
+
 // Sources: removing a folder drops its assets, keeps assets that also live elsewhere, and remembers reviews.
 lib = store.load();
 const srcCount = store.listSources(lib).find((x) => x.path === path.resolve(copyDir)).count;

@@ -41,7 +41,11 @@ input, select, textarea { background: #111216; border: 1px solid var(--line); bo
 .tag-cloud button { font-size: 11px; padding: 2px 7px; border-radius: 10px; background: #23272e; color: var(--muted); }
 .side-heading-row { display: flex; justify-content: space-between; align-items: center; }
 button.tiny { font-size: 10px; letter-spacing: 0; text-transform: none; padding: 0 2px; }
-.source-row { position: relative; }
+.source-row { position: relative; display: flex; align-items: center; }
+.source-row .src-check { margin: 0 0 0 8px; flex: none; accent-color: var(--accent); cursor: pointer; }
+.source-row .nav-item { flex: 1; min-width: 0; padding-left: 6px; }
+.source-row.off .nav-item { opacity: .45; }
+.hidden-note { padding: 2px 10px 6px; font-size: 11px; color: var(--muted); }
 .source-row .nav-item { padding-right: 26px; }
 .source-row .src-x { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); visibility: hidden; border: 0; background: none; color: var(--bad); font-size: 14px; padding: 0 5px; }
 .source-row:hover .src-x, .source-row:focus-within .src-x { visibility: visible; }

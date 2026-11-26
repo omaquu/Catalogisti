@@ -1,6 +1,6 @@
 {
   "name": "catalogisti",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Catalogisti — desktop library for game 3D models and textures, with quality reviews and an MCP server for AI agents",
   "main": "main.js",
   "scripts": {

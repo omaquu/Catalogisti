@@ -171,12 +171,22 @@
       const parts = s.path ? s.path.split(/[\\/]/).filter(Boolean) : [];
       const generic = /^(models?|textures?|assets?|glb|export|exports|output|out|files)$/i.test(parts.at(-1) || "");
       const label = s.path ? parts.slice(generic ? -2 : -1).join("/") : s.name + " (added files)";
-      const row = el("div", { class: "source-row" },
+      const key = s.path ? { path: s.path } : { project: s.name };
+      const row = el("div", { class: "source-row" + (s.enabled ? "" : " off") },
+        el("input", { type: "checkbox", class: "src-check", checked: s.enabled, title: s.enabled ? "Untick to hide this folder's models (reviews are kept)" : "Tick to show this folder's models",
+          "aria-label": "Show models from " + label, onchange: async (e) => {
+            await call(api.setSourceEnabled, key, e.target.checked);
+            say(e.target.checked ? "Showing " + label + "." : "Hiding " + label + " — its reviews and notes are kept.");
+            await reload();
+          } }),
         navItem(label, s.count, state.source === (s.path || s.name), () => setFilter({ source: s.path || s.name, sourcePath: s.path }), { color: s.kind === "texture" || s.kind === "texture-library" ? "#a78bfa" : "#38bdf8" }),
         el("button", { class: "src-x", type: "button", title: "Remove this source", "aria-label": "Remove source " + label, onclick: (e) => { e.stopPropagation(); confirmRemoveSource(s); } }, "×"));
-      row.firstChild.title = s.path || s.name;
+      row.querySelector(".nav-item").title = s.path || s.name;
       return row;
     }) : [el("p", { class: "hint", style: "padding:0 8px" }, "No sources yet. Use + Import.")]));
+    const off = sources.filter((s) => !s.enabled);
+    $("hidden-note").hidden = !off.length;
+    $("hidden-note").textContent = off.length ? (lib.hidden_count || 0) + " assets hidden in " + off.length + " unticked source" + (off.length > 1 ? "s" : "") + "." : "";
   }
 
   function confirmRemoveSource(s) {
@@ -254,7 +264,9 @@
     if (list.length > state.limit) cards.push(el("button", { class: "card", type: "button", onclick: () => { state.limit += PAGE; renderGrid(); } },
       el("div", { class: "thumb" }, el("span", { class: "ph" }, "Show " + Math.min(PAGE, list.length - state.limit) + " more"))));
     $("grid").replaceChildren(...cards);
-    if (!lib.assets.length) say("The library is empty. Use + Import to add a folder of models or textures.");
+    if (!lib.assets.length) say(lib.hidden_count
+      ? "No source is ticked. Tick a folder under Sources to show its models, or use + Import to add a new folder."
+      : "The library is empty. Use + Import to add a folder of models or textures.");
   }
 
   function renderRequests() {

@@ -301,7 +301,7 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
   root = path.resolve(root);
   project = project || path.basename(root);
   const added = [], skipped = [];
-  const known = new Set(lib.assets.flatMap((a) => [a.file, ...Object.values(a.maps || {})]).filter(Boolean).map((f) => path.resolve(f).toLowerCase()));
+  const known = new Set(lib.assets.flatMap((a) => [a.file, ...(a.locations || []), ...Object.values(a.maps || {})]).filter(Boolean).map((f) => path.resolve(f).toLowerCase()));
   const now = new Date().toISOString();
   if (kind === "model") {
     const sidecars = new Map();
@@ -352,7 +352,9 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
       lib.assets.push(asset); added.push(asset.id);
     }
   }
-  if (!lib.projects.some((p) => p.path.toLowerCase() === root.toLowerCase())) lib.projects.push({ name: project, path: root, kind, imported: now });
+  const existing = lib.projects.find((p) => p.path.toLowerCase() === root.toLowerCase());
+  if (existing) delete existing.enabled; // importing a folder again ticks it again
+  else lib.projects.push({ name: project, path: root, kind, imported: now });
   const duplicates = findDuplicates(lib, added);
   for (const d of duplicates) lib.assets.find((x) => x.id === d.id).possible_duplicate_of = d.matches.map((m) => m.id);
   return { added: added.length, skipped: skipped.length, ids: added, duplicates };
@@ -362,7 +364,7 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
 function importTextureLibrary(lib, catalogFile, { by = "app" } = {}) {
   const cat = JSON.parse(fs.readFileSync(catalogFile, "utf-8"));
   const root = cat.library || path.dirname(catalogFile);
-  const known = new Set(lib.assets.map((a) => (a.file || "").toLowerCase()));
+  const known = new Set(lib.assets.flatMap((a) => [a.file, ...(a.locations || [])]).filter(Boolean).map((f) => f.toLowerCase()));
   const now = new Date().toISOString();
   // Group separate map files (x_diff_2k, x_nor_gl_1k, x_ao_1k…) into one texture set.
   const groups = new Map();
@@ -411,15 +413,49 @@ function under(file, dir) {
 
 /** Every folder the library reads from, with how many assets each holds. Assets added one by one are grouped by project. */
 function listSources(lib) {
-  const out = lib.projects.map((p) => ({ name: p.name, path: p.path, kind: p.kind, imported: p.imported,
+  const out = lib.projects.map((p) => ({ name: p.name, path: p.path, kind: p.kind, imported: p.imported, enabled: p.enabled !== false,
     count: lib.assets.filter((a) => [a.file, ...(a.locations || [])].some((f) => under(f, p.path))).length }));
   const loose = new Map();
   for (const a of lib.assets) {
     if (lib.projects.some((p) => under(a.file, p.path))) continue;
     loose.set(a.project || "Unsorted", (loose.get(a.project || "Unsorted") || 0) + 1);
   }
-  for (const [name, count] of loose) out.push({ name, path: null, kind: "files", count });
+  for (const [name, count] of loose) out.push({ name, path: null, kind: "files", count, enabled: !(lib.hidden_projects || []).includes(name) });
   return out;
+}
+
+/** Tick or untick a source. Unticked sources stay in the library (with their reviews) but their assets are hidden. */
+function setSourceEnabled(lib, { path: dir, project } = {}, enabled = true) {
+  if (dir) {
+    const p = lib.projects.find((x) => path.resolve(x.path).toLowerCase() === path.resolve(dir).toLowerCase());
+    if (!p) throw new Error("No source " + dir);
+    if (enabled) delete p.enabled; else p.enabled = false;
+  } else if (project) {
+    const hidden = new Set(lib.hidden_projects || []);
+    if (enabled) hidden.delete(project); else hidden.add(project);
+    lib.hidden_projects = [...hidden];
+    if (!lib.hidden_projects.length) delete lib.hidden_projects;
+  } else throw new Error("setSourceEnabled needs a path or a project name.");
+  return listSources(lib);
+}
+
+/**
+ * Is the asset in a ticked source? An asset is shown when any of its files lies in a ticked folder source,
+ * or when it was added on its own (no folder source) and its project is not hidden.
+ */
+function isVisible(lib, a) {
+  const files = [a.file, ...(a.locations || [])];
+  let inSource = false;
+  for (const p of lib.projects) {
+    if (!files.some((f) => under(f, p.path))) continue;
+    if (p.enabled !== false) return true;
+    inSource = true;
+  }
+  return !inSource && !(lib.hidden_projects || []).includes(a.project || "Unsorted");
+}
+
+function visibleAssets(lib) {
+  return lib.assets.filter((a) => isVisible(lib, a));
 }
 
 function archiveAsset(lib, a) {
@@ -838,6 +874,7 @@ function search(lib, q = {}) {
   const want = (q.tags || []).map(normTag).filter(Boolean);
   const anyTags = (q.any_tags || []).map(normTag).filter(Boolean);
   let list = lib.assets.filter((a) => {
+    if (!q.include_hidden && !isVisible(lib, a)) return false;
     if (q.kind && q.kind !== "all" && a.kind !== q.kind.replace(/s$/, "")) return false;
     if (q.category && !(a.categories || [a.category]).some((c) => c.toLowerCase() === String(q.category).toLowerCase())) return false;
     if (q.project && a.project !== q.project) return false;
@@ -860,7 +897,7 @@ function search(lib, q = {}) {
 
 function tagCounts(lib, { kind, prefix } = {}) {
   const counts = new Map();
-  for (const a of lib.assets) {
+  for (const a of visibleAssets(lib)) {
     if (kind && a.kind !== kind) continue;
     for (const t of a.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
   }
@@ -912,5 +949,5 @@ module.exports = {
   setDataDir, dataDir, libraryPath, thumbsDir, load, save, mutate, emptyLibrary,
   slugify, normTag, autoTags, classifyModel, classifyTexture, measureGlb, splitMap,
   importFolder, importTextureLibrary, addAsset, replaceFile, setCategory, editTags, setReview, updateAsset,
-  listSources, removeSource, clearLibrary, classifyModels, normalizeCategories, findDuplicates, resolveDuplicate, identicalFiles, editCategories, deleteAsset, ownedFiles, groupMembers, linkAssets, unlinkAsset, autoGroup, referencesFor, restoreVersion, findAsset, search, summary, needsFix, tagCounts, createRequest, updateRequest, completeRequest,
+  listSources, setSourceEnabled, isVisible, visibleAssets, removeSource, clearLibrary, classifyModels, normalizeCategories, findDuplicates, resolveDuplicate, identicalFiles, editCategories, deleteAsset, ownedFiles, groupMembers, linkAssets, unlinkAsset, autoGroup, referencesFor, restoreVersion, findAsset, search, summary, needsFix, tagCounts, createRequest, updateRequest, completeRequest,
 };

@@ -34,6 +34,7 @@ const TOOLS = [
       project: str("Project name"),
       review: { type: "string", enum: store.DECISIONS, description: "Only assets with this review decision" },
       needs_fix: { type: "boolean", description: "Only assets marked needs_fix/regenerate or carrying a problem flag" },
+      include_hidden: { type: "boolean", description: "Also search sources the owner has unticked (hidden). Default false" },
       limit: { type: "number", description: "Max results (default 25, max 200)" },
     } },
   },
@@ -137,7 +138,7 @@ const TOOLS = [
   },
   {
     name: "list_sources",
-    description: "The folders the library reads models and textures from, with asset counts.",
+    description: "The folders the library reads models and textures from, with asset counts and whether each is ticked (enabled). Assets of unticked sources are hidden from searches.",
     inputSchema: { type: "object", properties: {} },
   },
   {
@@ -193,11 +194,12 @@ function call(name, a = {}) {
     case "list_sources": return store.listSources(store.load());
     case "catalog_summary": {
       const lib = store.load();
-      const by = (f) => lib.assets.reduce((m, x) => ((m[f(x)] = (m[f(x)] || 0) + 1), m), {});
+      const shown = store.visibleAssets(lib);
+      const by = (f) => shown.reduce((m, x) => ((m[f(x)] = (m[f(x)] || 0) + 1), m), {});
       return {
-        data_folder: store.dataDir(), assets: lib.assets.length, by_kind: by((x) => x.kind),
+        data_folder: store.dataDir(), assets: shown.length, hidden_by_unticked_sources: lib.assets.length - shown.length, by_kind: by((x) => x.kind),
         by_category: by((x) => x.kind + " / " + x.category), by_review: by((x) => x.review?.decision || "unreviewed"),
-        needs_fix: lib.assets.filter(store.needsFix).map(store.summary),
+        needs_fix: shown.filter(store.needsFix).map(store.summary),
         open_requests: lib.requests.filter((r) => r.status === "open" || r.status === "in_progress"),
       };
     }

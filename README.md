@@ -39,8 +39,9 @@ and let AI agents use the same library through an MCP server.
   "move to Recycle Bin"; source images are never deleted.
 - **Generation requests**: ask for a new asset or a fixed version; agents pick
   them up through MCP.
-- **Sources**: the sidebar lists every folder the library reads from. Hover a
-  source and click × to stop reading from it (its assets leave the catalog,
+- **Sources**: the sidebar lists every folder the library reads from. Only
+  ticked folders are shown (in the app and to agents); untick one to hide its
+  models while keeping their reviews. Hover a source and click × to stop reading from it (its assets leave the catalog,
   files stay on disk), or **Clear all…** to start an empty library and import
   new folders. Reviews, notes and tags are remembered and return if the same
   files are imported again.

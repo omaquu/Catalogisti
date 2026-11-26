@@ -89,7 +89,15 @@ app.whenReady().then(() => {
   protocol.handle("asset", (request) => net.fetch(pathToFileURL(urlToPath(request.url)).toString()));
   fs.mkdirSync(store.thumbsDir(), { recursive: true });
 
-  handle("library:get", () => store.load());
+  // The window only sees assets of ticked sources; unticked ones keep their reviews in the file.
+  handle("library:get", () => {
+    const lib = store.load();
+    const total = lib.assets.length;
+    lib.assets = store.visibleAssets(lib);
+    lib.hidden_count = total - lib.assets.length;
+    return lib;
+  });
+  handle("sources:enable", (source, enabled) => mutate((lib) => store.setSourceEnabled(lib, source, enabled)));
   handle("sources:list", () => store.listSources(store.load()));
   handle("sources:remove", (source) => mutate((lib) => store.removeSource(lib, source)));
   handle("library:clear", () => mutate((lib) => store.clearLibrary(lib)));
