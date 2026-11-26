@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' asset:; img-src 'self' asset: data: blob:; media-src 'self' asset: blob:; connect-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:">
+  <title>Catalogisti</title>
+  <link rel="stylesheet" href="app.css">
+  <script defer src="model-viewer.umd.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" aria-label="Library">
+    <div class="brand"><span class="brand-dot" aria-hidden="true"></span><strong>Catalogisti</strong><small id="total-pill"></small></div>
+    <div class="import-row">
+      <button id="btn-import" class="primary" type="button" aria-haspopup="menu" aria-expanded="false">+ Import</button>
+      <button id="btn-mcp" type="button" title="Connect AI agents (MCP)">Agents</button>
+    </div>
+    <div id="import-menu" class="menu" role="menu" hidden>
+      <button role="menuitem" data-import="model" type="button">Folder of 3D models…</button>
+      <button role="menuitem" data-import="texture" type="button">Folder of textures…</button>
+      <button role="menuitem" data-import="files" type="button">Single files…</button>
+      <button role="menuitem" data-import="texlib" type="button">Shared texture library…</button>
+    </div>
+    <nav class="side-scroll">
+      <p class="side-heading">Library</p>
+      <div id="views" class="nav-list"></div>
+      <p class="side-heading">Categories</p>
+      <div id="categories" class="nav-list"></div>
+      <p class="side-heading">Projects</p>
+      <div id="projects" class="nav-list"></div>
+      <p class="side-heading">Popular tags</p>
+      <div id="tag-cloud" class="tag-cloud"></div>
+    </nav>
+    <div class="side-foot"><button id="btn-export" type="button" class="quiet">Export library JSON</button><span id="data-path"></span></div>
+  </aside>
+
+  <main class="main">
+    <header class="toolbar">
+      <div class="crumbs"><h1 id="crumb">All assets</h1><span id="count" class="pill"></span></div>
+      <input id="query" type="search" placeholder="Search names, tags, notes…  (#tag works too)" aria-label="Search">
+      <select id="sort" aria-label="Sort">
+        <option value="name">Name</option>
+        <option value="recent">Recently changed</option>
+        <option value="tris">Most triangles</option>
+        <option value="review">Needs attention first</option>
+      </select>
+      <input id="zoom" type="range" min="120" max="320" value="180" aria-label="Card size">
+    </header>
+    <div id="chips" class="chips" hidden></div>
+    <p id="message" class="message" role="status" aria-live="polite"></p>
+    <div id="grid-wrap" class="grid-wrap"><div id="grid" class="grid"></div></div>
+    <section id="requests-view" class="requests" hidden></section>
+  </main>
+
+  <aside id="inspector" class="inspector" aria-label="Asset details">
+    <div id="insp-empty" class="insp-empty">Select an asset to see its 3D view, tags and quality review.</div>
+    <div id="insp" hidden>
+      <div class="insp-head">
+        <span id="insp-kind" class="kind-badge"></span>
+        <input id="insp-name" class="name-input" aria-label="Asset name">
+      </div>
+      <div id="preview" class="preview"></div>
+      <div id="maps" class="maps"></div>
+      <div class="field-row">
+        <label for="insp-category">Category</label>
+        <select id="insp-category"></select>
+      </div>
+      <div class="field">
+        <span class="label">Tags</span>
+        <div id="tags" class="tags"></div>
+      </div>
+      <dl id="meta" class="meta"></dl>
+      <div class="actions">
+        <button id="act-show" type="button">Show in folder</button>
+        <button id="act-replace" type="button" title="Swap to a corrected file; the old one stays in the version history">Replace with fixed version…</button>
+        <button id="act-request" type="button">Request regeneration</button>
+      </div>
+      <form id="review" class="review">
+        <h3>Quality review</h3>
+        <div id="decision" class="segmented" role="radiogroup" aria-label="Decision"></div>
+        <div id="flags" class="flags"></div>
+        <label for="notes">Notes (agents read these)</label>
+        <textarea id="notes" rows="4" maxlength="8000" placeholder="What needs fixing? e.g. torn cheek plate, scale too large, texture seam on the back…"></textarea>
+        <div class="review-foot"><button class="primary" type="submit">Save review</button><span id="saved" role="status"></span></div>
+      </form>
+      <details id="versions" class="versions" hidden><summary>Version history</summary><ol id="version-list"></ol></details>
+      <button id="act-delete" class="danger" type="button">Delete asset…</button>
+    </div>
+  </aside>
+</div>
+
+<div id="thumb-stage" class="thumb-stage" aria-hidden="true"></div>
+
+<dialog id="dlg-delete">
+  <form method="dialog">
+    <h2>Delete asset?</h2>
+    <p id="del-text"></p>
+    <label class="check"><input id="del-trash" type="checkbox"> Also move the file to the Recycle Bin</label>
+    <div class="dlg-foot"><button value="cancel" type="submit">Cancel</button><button value="ok" class="danger" type="submit">Delete</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-request">
+  <form method="dialog">
+    <h2 id="req-title">Request an asset</h2>
+    <label for="req-prompt">What should be made or fixed?</label>
+    <textarea id="req-prompt" rows="4"></textarea>
+    <label for="req-tris">Triangle budget (models)</label>
+    <input id="req-tris" type="number" min="0" step="100">
+    <p class="hint">Agents see open requests through MCP (list_requests) and generate models with the Modly MCP.</p>
+    <div class="dlg-foot"><button value="cancel" type="submit">Cancel</button><button value="ok" class="primary" type="submit">Create request</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-mcp">
+  <h2>Connect AI agents</h2>
+  <p>Agents use the Catalogisti MCP server to search models and textures by tag, read your reviews and notes, add their findings and register new assets. Add this to the agent's MCP configuration (for example <code>.mcp.json</code> in a project):</p>
+  <pre id="mcp-json"></pre>
+  <div class="dlg-foot"><button id="mcp-copy" class="primary" type="button">Copy</button><button id="mcp-close" type="button">Close</button></div>
+  <p class="hint" id="mcp-data"></p>
+</dialog>
+</body>
+</html>

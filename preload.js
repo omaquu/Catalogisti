@@ -1,0 +1,29 @@
+"use strict";
+const { contextBridge, ipcRenderer } = require("electron");
+
+async function call(channel, ...args) {
+  const r = await ipcRenderer.invoke(channel, ...args);
+  if (!r.ok) throw new Error(r.error);
+  return r.value;
+}
+
+contextBridge.exposeInMainWorld("catalogisti", {
+  getLibrary: () => call("library:get"),
+  info: () => call("library:info"),
+  importFolder: (kind) => call("import:folder", kind),
+  importTextureLibrary: (file) => call("import:textureLibrary", file),
+  importFiles: () => call("import:files"),
+  updateAsset: (id, fields) => call("asset:update", id, fields),
+  editTags: (id, add, remove) => call("asset:tags", id, add, remove),
+  setReview: (id, review) => call("asset:review", id, review),
+  deleteAsset: (id, trashFile) => call("asset:delete", id, trashFile),
+  replaceFile: (id) => call("asset:replace", id),
+  saveThumbnail: (id, bytes) => call("asset:thumbnail", id, bytes),
+  createRequest: (r) => call("request:create", r),
+  updateRequest: (id, fields) => call("request:update", id, fields),
+  showInFolder: (file) => call("shell:show", file),
+  openFile: (file) => call("shell:open", file),
+  copy: (text) => call("clipboard:write", text),
+  exportLibrary: () => call("export:json"),
+  onLibraryChanged: (fn) => ipcRenderer.on("library:changed", (_e, by) => fn(by)),
+});

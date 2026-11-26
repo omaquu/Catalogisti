@@ -1,100 +1,87 @@
-# Catalogisti — 3D & Peliprojektien kirjasto
+# Catalogisti
 
-Open [Catalogisti](index.html) in a regular browser or host the static bundle on
-GitHub Pages. On Windows, `Open_Asset_Browser.cmd` at the project root opens a
-local browser tab with CORS support for large local 3D model files:
+A desktop library for game 3D models and textures. Browse everything as rendered
+thumbnails, review quality, tag and categorise assets, swap in fixed versions,
+and let AI agents use the same library through an MCP server.
 
-```powershell
-python tools/asset_catalog/serve.py
-```
+![Catalogisti](docs/screenshot.png)
 
-Click **+ Tuo kansio** (or drag and drop a project folder onto the grid) to
-connect your own local model folder for any game or project — even when
-viewing Catalogisti on GitHub Pages. Subfolders inside your imported folder
-appear automatically under **Projektit ja kansiot**, and `.glb` files stay
-locally in your browser without uploading. Choose a version or a project texture
-in an asset's inspector panel, use **Laatuarvio** checkboxes (*Voitais
-kokeilla pienentää vielä kolmioita*, *Toinen samanlainen modelli on jo*), and
-export your review decisions with **Vie**.
+## Features
 
-## Modly weapon parts
+- **Models and Textures** as separate libraries. Models: weapon parts, armor,
+  props, buildings, vehicles and more. Textures: walls, ground, floors, roofs,
+  stone, brick, wood, metal… with their PBR maps (albedo, normal, roughness,
+  AO, height, ORM) grouped into one entry.
+- **Import** a folder of `.glb`/`.gltf` models, a folder of texture images, single
+  files, or a shared texture library `catalog.json`. Categories and tags are
+  guessed from file names and from `results.json` / `manifest.json` sidecars
+  (Modly batches), triangles and size are measured from the GLB.
+- **3D preview** (model-viewer) and cached thumbnails rendered on import.
+- **Tags**: hover a tag to delete it, `+` to add; typing suggests existing tags
+  (`i` → `#iron`, `#item`). Click a tag in the sidebar to filter, or search `#tag`.
+- **Quality review**: Approved / Needs fix / Regenerate / Remove, problem flags
+  (reduce triangles, duplicate, texture, scale, broken mesh) and notes that agents read.
+- **Replace with fixed version**: swaps the file, keeps the old file and its
+  review in the version history.
+- **Delete** an asset at any time (optionally moving the file to the Recycle Bin).
+- **Generation requests**: ask for a new asset or a fixed version; agents pick
+  them up through MCP.
+- Everything is saved immediately to one file, `library.json`, in
+  `%APPDATA%\Catalogisti\library` (override with `CATALOGISTI_DATA`). Changes made
+  by agents show up in the open app automatically.
 
-The batch manifest is at `source_art/mindflower_weapon_parts/manifest.json`.
-The local catalog links each entry to its importable Modly workflow. Each
-workflow feeds the same source image into TripoSG and TRELLIS.2 GGUF Texture
-Mesh, and feeds the TripoSG mesh into Texture Mesh. Use the named image in
-`references/` if Modly asks to locate the source after moving this project.
+## Run
 
-```powershell
-python tools/asset_catalog/weapon_workflows.py
-python tools/asset_catalog/build.py
-```
-
-Place each resulting GLB in `source_art/mindflower_weapon_parts/models/`
-using the manifest's `file_id` and the `.glb` extension. The next catalog
-build associates it with its source views and measures the actual result. Check
-the 3D silhouette, texture, game scale and sockets before approving a part.
-
-## Review workflow
-
-Review the asset, a particular GLB, or a texture separately. Decisions are
-**Hyväksytty**, **Generoi uudelleen** and **Poistoehdotus**. A removal flag is a
-review decision. Save your notes and use **Vie arviot** to download them.
-**Tuo arviot** merges by newest update. To share decisions on GitHub, replace
-`asset_catalog/reviews.json` with the export and rebuild. A GLB replaced with
-different bytes gets its own review. Texture decisions use their repository path.
-
-## Inventory and publishing
+Download `Catalogisti-<version>-portable.exe` from the Releases page and start it,
+or from source:
 
 ```powershell
-python -m pip install Pillow
-python tools/asset_catalog/build.py --refresh-modly "$env:USERPROFILE/Documents/Modly/workspace"
-python tools/asset_catalog/build.py --pages scratch/asset-catalog-pages
+npm install
+npm start
 ```
 
-The builder scans the Mindflower tree and keeps an audit of scanned GLBs and glTFs
-in `inventory.json`. Scratch, third-party demos, animation-only files and terrain
-are excluded from the catalog. Two identified working variants are explicitly
-retained in the listing. The separate Modly snapshot uses workspace-relative paths
-and contains the V15 sets and identifiable steampunk parts. The snapshot can be
-rebuilt without contacting Modly, from original files and the local run history.
+Build the portable exe yourself with `npm run dist` (output in `dist/`).
 
-Use `--stage-modly-previews` together with `--refresh-modly` to copy selected
-existing Prepare for Game outputs to `hosted_models/`. This makes those particular
-versions available on Pages. The choices use the recorded output, the configured
-virtual size and triangle budget. They remain candidates for visual review. The
-remaining external versions require the workspace files to be provided locally.
-GLB files selected for the hosted build contain embedded material textures.
+## MCP server for agents
 
-The installed Modly processing engine also has a local batch entry point.
-`tools/asset_catalog/prepare_local.py` accepts the installed API directory and
-the Modly workspace. Run it with a Python environment that already supplies
-Modly's mesh dependencies. The receipt lives beside the derived GLBs at
-`source_art/asset_catalog_modly_prepared/batch.json`. The batch publishes a
-candidate only after measuring its triangle count and scale and checking the
-source material channels and named sockets. Files marked over budget require
-retopology and texture reprojection review.
+Click **Agents** in the app to copy the exact configuration. It looks like:
 
-The Pages workflow builds only the static catalog artifact. In the GitHub repo,
-set **Settings → Pages → Source → GitHub Actions** and run **Mindflower Asset
-Catalog** from the default branch. The **publish** checkbox controls deployment.
-The workflow output also provides a downloadable artifact. Check the repository
-audience before selecting publish, since the artifact includes actual review
-models and selected production textures.
+```json
+{
+  "mcpServers": {
+    "catalogisti": {
+      "command": "node",
+      "args": ["C:/path/to/Catalogisti/resources/mcp/server.js"],
+      "env": { "CATALOGISTI_DATA": "C:/Users/<you>/AppData/Roaming/Catalogisti/library" }
+    }
+  }
+}
+```
 
-## Reading the metrics
+Node.js must be on the PATH. Tools:
 
-- Polygon count is the triangulated geometry referenced by glTF's default scene.
-  Counts include repeated mesh nodes. Bounds use transformed accessor boxes in
-  X × Y × Z. These are estimates for rigid rest pose. An uncalibrated model's
-  file dimensions are distinct from its intended in-game size.
-- Material tags come from source descriptions, filenames or material names.
-  Unlabelled materials require visual identification.
-- Bound GLB channels and separate file maps have independent evidence. A height
-  map inferred from a source texture is surface relief. Gaussian records report
-  point counts.
-- A Modly badge requires a recorded successful Prepare for Game run. A bake badge
-  means a baked GLB exists. Review decisions, fitting, rigs, LODs, and Godot
-  validation are tracked separately from the processing stage.
-- The hosted artifact includes the explicitly linked weapon references.
-  Unlinked source sheets and ground assets are omitted from hosted media.
+| Tool | Use |
+| --- | --- |
+| `catalog_summary` | Counts, assets needing fixes, open requests |
+| `search_assets` | Search by text, `tags` (all), `any_tags`, kind, category, review, `needs_fix` |
+| `get_asset` | Full record: file, maps, triangles, source image/prompt, versions, review notes |
+| `find_or_request` | Find a usable asset for a need; if none, open a request with instructions |
+| `list_tags`, `list_categories` | Reuse existing tags and categories |
+| `set_review` | Decision, flags, notes, or `append_note` for a dated finding |
+| `edit_tags`, `update_asset` | Tag, rename, recategorise |
+| `add_asset` | Register a generated GLB or texture (`request_id`, or `replaces` for a fixed version) |
+| `request_asset`, `list_requests`, `update_request` | Generation work queue |
+| `delete_asset` | Remove from the catalog (the file stays on disk) |
+
+New models are generated with the Modly MCP (image-to-3D), reduced to the
+triangle budget, exported as GLB and registered with `add_asset`.
+
+## Tests
+
+```powershell
+npm test
+```
+
+## Licence
+
+MIT. `src/model-viewer.umd.js` is Google's model-viewer (Apache-2.0).
