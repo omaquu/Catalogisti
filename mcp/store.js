@@ -325,6 +325,7 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
         created: now, updated: now, added_by: by,
       };
       normalizeCategories(asset);
+      restoreArchived(lib, asset);
       lib.assets.push(asset); added.push(asset.id); known.add(file.toLowerCase());
     }
   } else {
@@ -347,6 +348,7 @@ function importFolder(lib, root, { kind = "model", project, by = "app" } = {}) {
         created: now, updated: now, added_by: by,
       };
       normalizeCategories(asset);
+      restoreArchived(lib, asset);
       lib.assets.push(asset); added.push(asset.id);
     }
   }
@@ -394,7 +396,102 @@ function importTextureLibrary(lib, catalogFile, { by = "app" } = {}) {
     known.add(file.toLowerCase());
     added++;
   }
+  if (added && !lib.projects.some((p) => p.path.toLowerCase() === String(root).toLowerCase()))
+    lib.projects.push({ name: "Texture Library", path: root, kind: "texture-library", imported: now });
   return { added };
+}
+
+// ── Import sources (the folders models and textures are read from) ──
+
+function under(file, dir) {
+  if (!file || !dir) return false;
+  const f = path.resolve(file).toLowerCase(), d = path.resolve(dir).toLowerCase().replace(/[\\/]+$/, "");
+  return f === d || f.startsWith(d + path.sep);
+}
+
+/** Every folder the library reads from, with how many assets each holds. Assets added one by one are grouped by project. */
+function listSources(lib) {
+  const out = lib.projects.map((p) => ({ name: p.name, path: p.path, kind: p.kind, imported: p.imported,
+    count: lib.assets.filter((a) => [a.file, ...(a.locations || [])].some((f) => under(f, p.path))).length }));
+  const loose = new Map();
+  for (const a of lib.assets) {
+    if (lib.projects.some((p) => under(a.file, p.path))) continue;
+    loose.set(a.project || "Unsorted", (loose.get(a.project || "Unsorted") || 0) + 1);
+  }
+  for (const [name, count] of loose) out.push({ name, path: null, kind: "files", count });
+  return out;
+}
+
+function archiveAsset(lib, a) {
+  lib.archive ??= {};
+  const keep = { name: a.name, tags: a.tags, categories: a.categories, review: a.review, versions: a.versions, source: a.source, removed: new Date().toISOString() };
+  for (const f of [a.file, ...(a.locations || [])]) if (f) lib.archive[f.toLowerCase()] = keep;
+  const keys = Object.keys(lib.archive);
+  if (keys.length > 5000) for (const k of keys.slice(0, keys.length - 5000)) delete lib.archive[k];
+}
+
+/** A file that comes back after its source was removed gets its old review, tags and categories again. */
+function restoreArchived(lib, asset) {
+  const old = lib.archive?.[String(asset.file).toLowerCase()];
+  if (!old) return asset;
+  Object.assign(asset, { name: old.name || asset.name, tags: old.tags || asset.tags, categories: old.categories || asset.categories,
+    review: old.review || asset.review, versions: old.versions || asset.versions, source: asset.source || old.source });
+  normalizeCategories(asset);
+  delete lib.archive[String(asset.file).toLowerCase()];
+  return asset;
+}
+
+/**
+ * Stop reading from a source: removes its folder entry and every asset whose files are all inside it.
+ * An asset that also lives elsewhere keeps its other location. Files on disk are never touched; reviews
+ * are archived and come back if the same files are imported again.
+ * Pass {path} for a folder source, or {project} for assets added one by one.
+ */
+function removeSource(lib, { path: dir, project } = {}) {
+  if (!dir && !project) throw new Error("removeSource needs a path or a project name.");
+  const inside = (f) => (dir ? under(f, dir) : false);
+  let removed = 0, kept = 0;
+  const survivors = [];
+  for (const a of lib.assets) {
+    const match = dir ? [a.file, ...(a.locations || [])].some(inside)
+      : (a.project || "Unsorted") === project && !lib.projects.some((p) => under(a.file, p.path));
+    if (!match) { survivors.push(a); continue; }
+    const elsewhere = dir ? [a.file, ...(a.locations || [])].filter((f) => !inside(f)) : [];
+    if (elsewhere.length) {
+      a.file = elsewhere[0];
+      a.locations = elsewhere.slice(1);
+      if (!a.locations.length) delete a.locations;
+      try { Object.assign(a, fileInfo(a.file)); } catch { /* missing */ }
+      a.updated = new Date().toISOString();
+      survivors.push(a);
+      kept++;
+    } else {
+      archiveAsset(lib, a);
+      removed++;
+    }
+  }
+  const gone = new Set(lib.assets.filter((a) => !survivors.includes(a)).map((a) => a.id));
+  lib.assets = survivors;
+  // Drop references to removed assets: variant groups of one, same-name hints.
+  for (const g of new Set(lib.assets.map((a) => a.group).filter(Boolean))) {
+    const members = lib.assets.filter((a) => a.group === g);
+    if (members.length === 1) delete members[0].group;
+  }
+  for (const a of lib.assets) if (a.possible_duplicate_of) {
+    a.possible_duplicate_of = a.possible_duplicate_of.filter((id) => !gone.has(id));
+    if (!a.possible_duplicate_of.length) delete a.possible_duplicate_of;
+  }
+  if (dir) lib.projects = lib.projects.filter((p) => path.resolve(p.path).toLowerCase() !== path.resolve(dir).toLowerCase());
+  return { removed, kept_elsewhere: kept, removed_ids: [...gone] };
+}
+
+/** Empty the whole library (every source). Reviews are archived the same way. */
+function clearLibrary(lib) {
+  for (const a of lib.assets) archiveAsset(lib, a);
+  const removed = lib.assets.length;
+  lib.assets = [];
+  lib.projects = [];
+  return { removed };
 }
 
 function cleanSource(s) {
@@ -815,5 +912,5 @@ module.exports = {
   setDataDir, dataDir, libraryPath, thumbsDir, load, save, mutate, emptyLibrary,
   slugify, normTag, autoTags, classifyModel, classifyTexture, measureGlb, splitMap,
   importFolder, importTextureLibrary, addAsset, replaceFile, setCategory, editTags, setReview, updateAsset,
-  classifyModels, normalizeCategories, findDuplicates, resolveDuplicate, identicalFiles, editCategories, deleteAsset, ownedFiles, groupMembers, linkAssets, unlinkAsset, autoGroup, referencesFor, restoreVersion, findAsset, search, summary, needsFix, tagCounts, createRequest, updateRequest, completeRequest,
+  listSources, removeSource, clearLibrary, classifyModels, normalizeCategories, findDuplicates, resolveDuplicate, identicalFiles, editCategories, deleteAsset, ownedFiles, groupMembers, linkAssets, unlinkAsset, autoGroup, referencesFor, restoreVersion, findAsset, search, summary, needsFix, tagCounts, createRequest, updateRequest, completeRequest,
 };

@@ -37,6 +37,15 @@
   function decision(a) { return a.review?.decision || "unreviewed"; }
   function needsFix(a) { const d = decision(a); return d === "needs_fix" || d === "regenerate" || (a.review?.flags || []).length > 0; }
   function selectedAsset() { return lib.assets.find((a) => a.id === state.selected) || null; }
+  function inSource(a) {
+    if (!state.sourcePath) return (a.project || "Unsorted") === state.source && !sources.some((s) => s.path && underPath(a.file, s.path));
+    return [a.file, ...(a.locations || [])].some((f) => underPath(f, state.sourcePath));
+  }
+  function underPath(f, dir) {
+    const norm = (x) => String(x || "").replace(/\//g, "\\").toLowerCase().replace(/\\+$/, "");
+    const a = norm(f), d = norm(dir);
+    return a === d || a.startsWith(d + "\\");
+  }
   function cats(a) { return a.categories?.length ? a.categories : [a.category || "Other"]; }
   function groupOf(a) { return a.group ? lib.assets.filter((x) => x.group === a.group) : [a]; }
   function base(p) { return String(p).split(/[\\/]/).pop(); }
@@ -70,6 +79,7 @@
       if (state.kind && a.kind !== state.kind) return false;
       if (state.category && !cats(a).includes(state.category)) return false;
       if (state.project && a.project !== state.project) return false;
+      if (state.source && !inSource(a)) return false;
       if (state.tag && !(a.tags || []).includes(state.tag)) return false;
       if (tags.length && !tags.every((t) => (a.tags || []).some((x) => x.startsWith(t)))) return false;
       if (words.length) {
@@ -108,7 +118,7 @@
   }
 
   function setFilter(patch) {
-    Object.assign(state, { view: "all", kind: "", category: "", project: "", tag: "" }, patch, { limit: PAGE });
+    Object.assign(state, { view: "all", kind: "", category: "", project: "", tag: "", source: "", sourcePath: null }, patch, { limit: PAGE });
     renderAll();
   }
 
@@ -126,7 +136,7 @@
       ["remove", "Marked for removal", A.filter((a) => decision(a) === "remove").length, "#f0786a"],
       ["requests", "Generation requests", openReq, "#f472b6"],
     ];
-    const nothingElse = !state.kind && !state.category && !state.project && !state.tag;
+    const nothingElse = !state.kind && !state.category && !state.project && !state.tag && !state.source;
     $("views").replaceChildren(...views.map(([v, label, n, color]) =>
       navItem(label, n, state.view === v && nothingElse, () => setFilter({ view: v }), { color })));
 
@@ -148,13 +158,64 @@
     $("projects").replaceChildren(...[...projects.entries()].sort((x, y) => x[0].localeCompare(y[0])).map(([p, n]) =>
       navItem(p, n, state.project === p, () => setFilter({ project: p }), { color: "#57c485" })));
 
+    renderSources();
     $("tag-cloud").replaceChildren(...tagCounts("").slice(0, 30).map(({ tag }) =>
       el("button", { type: "button", onclick: () => setFilter({ tag }), title: "Show #" + tag }, "#" + tag)));
+  }
+
+  // ── Sources: the folders the library reads from; hover × to stop reading one ──
+  let sources = [];
+  async function renderSources() {
+    try { sources = await api.listSources(); } catch { sources = []; }
+    $("sources").replaceChildren(...(sources.length ? sources.map((s) => {
+      const parts = s.path ? s.path.split(/[\\/]/).filter(Boolean) : [];
+      const generic = /^(models?|textures?|assets?|glb|export|exports|output|out|files)$/i.test(parts.at(-1) || "");
+      const label = s.path ? parts.slice(generic ? -2 : -1).join("/") : s.name + " (added files)";
+      const row = el("div", { class: "source-row" },
+        navItem(label, s.count, state.source === (s.path || s.name), () => setFilter({ source: s.path || s.name, sourcePath: s.path }), { color: s.kind === "texture" || s.kind === "texture-library" ? "#a78bfa" : "#38bdf8" }),
+        el("button", { class: "src-x", type: "button", title: "Remove this source", "aria-label": "Remove source " + label, onclick: (e) => { e.stopPropagation(); confirmRemoveSource(s); } }, "×"));
+      row.firstChild.title = s.path || s.name;
+      return row;
+    }) : [el("p", { class: "hint", style: "padding:0 8px" }, "No sources yet. Use + Import.")]));
+  }
+
+  function confirmRemoveSource(s) {
+    const dlg = $("dlg-source");
+    $("src-title").textContent = "Remove source?";
+    $("src-text").textContent = (s.path ? "Stop reading from " + s.path : "Remove the files added one by one to " + s.name) +
+      ". " + s.count + " asset(s) leave the catalog (an asset that also exists in another source stays, using that copy).";
+    $("src-ok").textContent = "Remove source";
+    dlg.returnValue = "";
+    dlg.showModal();
+    dlg.onclose = async () => {
+      if (dlg.returnValue !== "ok") return;
+      const r = await call(api.removeSource, s.path ? { path: s.path } : { project: s.name });
+      if (state.source === (s.path || s.name)) setFilter({});
+      say("Removed " + r.removed + " asset(s)" + (r.kept_elsewhere ? "; " + r.kept_elsewhere + " kept from their other location" : "") + ". Use + Import to add a new folder.");
+      await reload();
+    };
+  }
+
+  function confirmClearLibrary() {
+    const dlg = $("dlg-source");
+    $("src-title").textContent = "Clear the whole library?";
+    $("src-text").textContent = "All " + lib.assets.length + " assets and every source are removed from the catalog, so you can import new folders from scratch.";
+    $("src-ok").textContent = "Clear library";
+    dlg.returnValue = "";
+    dlg.showModal();
+    dlg.onclose = async () => {
+      if (dlg.returnValue !== "ok") return;
+      const r = await call(api.clearLibrary);
+      setFilter({});
+      say("Library cleared (" + r.removed + " assets). Use + Import to choose where models are read from.");
+      await reload();
+    };
   }
 
   function renderChips() {
     const chips = [];
     if (state.project) chips.push(["Project: " + state.project, { project: "" }]);
+    if (state.source) chips.push(["Source: " + (state.sourcePath ? base(state.sourcePath) : state.source), { source: "", sourcePath: null }]);
     if (state.tag) chips.push(["#" + state.tag, { tag: "" }]);
     if (state.category) chips.push([state.category, { category: "" }]);
     $("chips").hidden = !chips.length;
@@ -594,6 +655,7 @@
     });
     $("mcp-copy").addEventListener("click", async () => { await api.copy($("mcp-json").textContent); $("mcp-copy").textContent = "Copied"; });
     $("mcp-close").addEventListener("click", () => $("dlg-mcp").close());
+    $("btn-clear").addEventListener("click", confirmClearLibrary);
     $("btn-export").addEventListener("click", async () => { const p = await call(api.exportLibrary); if (p) say("Exported to " + p); });
     $("query").addEventListener("input", () => { state.limit = PAGE; renderGrid(); });
     $("sort").addEventListener("change", renderGrid);

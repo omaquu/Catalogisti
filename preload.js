@@ -10,6 +10,9 @@ async function call(channel, ...args) {
 contextBridge.exposeInMainWorld("catalogisti", {
   getLibrary: () => call("library:get"),
   info: () => call("library:info"),
+  listSources: () => call("sources:list"),
+  removeSource: (source) => call("sources:remove", source),
+  clearLibrary: () => call("library:clear"),
   importFolder: (kind) => call("import:folder", kind),
   importTextureLibrary: (file) => call("import:textureLibrary", file),
   importFiles: () => call("import:files"),

@@ -108,6 +108,27 @@ lib = store.load();
 assert.ok(!lib.assets.some((a) => a.id === helmet.id));
 assert.ok(fs.existsSync(fixed), "deleting from the catalog keeps the file");
 
+// Sources: removing a folder drops its assets, keeps assets that also live elsewhere, and remembers reviews.
+lib = store.load();
+const srcCount = store.listSources(lib).find((x) => x.path === path.resolve(copyDir)).count;
+assert.ok(srcCount >= 1);
+const pommelId = store.load().assets.find((a) => a.name === "Brass Pommel").id;
+store.mutate((l) => store.setReview(l, pommelId, { decision: "approved", notes: "keep" }));
+let rs = store.mutate((l) => store.removeSource(l, { path: src }));
+lib = store.load();
+const pommel = store.findAsset(lib, pommelId);
+assert.strictEqual(pommel.file, path.join(copyDir, "brass_pommel.glb"), "merged asset survives through its other location");
+assert.ok(!lib.projects.some((p) => p.path === path.resolve(src)));
+assert.ok(rs.removed > 0 && rs.kept_elsewhere === 1);
+rs = store.mutate((l) => store.removeSource(l, { path: copyDir }));
+assert.ok(!store.load().assets.some((a) => a.id === pommelId));
+store.mutate((l) => store.importFolder(l, copyDir, { kind: "model", project: "Copy" }));
+const back = store.load().assets.find((a) => a.name === "Brass Pommel");
+assert.strictEqual(back.review.decision, "approved", "review comes back when the same file is imported again");
+store.mutate((l) => store.clearLibrary(l));
+assert.strictEqual(store.load().assets.length, 0);
+assert.strictEqual(store.load().projects.length, 0);
+console.log("source tests passed");
 fs.writeFileSync(store.libraryPath(), "{broken");
 assert.throws(() => store.load(), /could not be read/);
 assert.strictEqual(fs.readFileSync(store.libraryPath(), "utf-8"), "{broken", "a damaged library is not overwritten");

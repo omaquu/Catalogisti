@@ -39,6 +39,11 @@ and let AI agents use the same library through an MCP server.
   "move to Recycle Bin"; source images are never deleted.
 - **Generation requests**: ask for a new asset or a fixed version; agents pick
   them up through MCP.
+- **Sources**: the sidebar lists every folder the library reads from. Hover a
+  source and click × to stop reading from it (its assets leave the catalog,
+  files stay on disk), or **Clear all…** to start an empty library and import
+  new folders. Reviews, notes and tags are remembered and return if the same
+  files are imported again.
 - Everything is saved immediately to one file, `library.json`, in
   `%APPDATA%\Catalogisti\library` (override with `CATALOGISTI_DATA`). Changes made
   by agents show up in the open app automatically.
@@ -76,6 +81,7 @@ Node.js must be on the PATH. Tools:
 | Tool | Use |
 | --- | --- |
 | `catalog_summary` | Counts, assets needing fixes, open requests |
+| `list_sources` | Folders the library reads from |
 | `search_assets` | Search by text, `tags` (all), `any_tags`, kind, category, review, `needs_fix` |
 | `get_asset` | Full record: file, maps, triangles, source image/prompt, versions, review notes |
 | `find_or_request` | Find a usable asset for a need; if none, open a request with instructions |

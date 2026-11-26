@@ -90,6 +90,9 @@ app.whenReady().then(() => {
   fs.mkdirSync(store.thumbsDir(), { recursive: true });
 
   handle("library:get", () => store.load());
+  handle("sources:list", () => store.listSources(store.load()));
+  handle("sources:remove", (source) => mutate((lib) => store.removeSource(lib, source)));
+  handle("library:clear", () => mutate((lib) => store.clearLibrary(lib)));
   handle("library:info", () => ({ dataDir: store.dataDir(), libraryFile: store.libraryPath(), mcp: mcpConfig(),
     categories: { model: store.MODEL_CATEGORIES, texture: store.TEXTURE_CATEGORIES }, flags: store.FLAGS, decisions: store.DECISIONS,
     textureLibrary: fs.existsSync("C:/TextureLibrary/catalog.json") ? "C:/TextureLibrary/catalog.json" : null }));

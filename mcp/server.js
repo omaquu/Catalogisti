@@ -136,6 +136,11 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { id: str("Request id"), status: { type: "string", enum: ["open", "in_progress", "done", "cancelled"] }, note: str("Note"), asset_id: str("Asset that fulfils it") }, required: ["id"] },
   },
   {
+    name: "list_sources",
+    description: "The folders the library reads models and textures from, with asset counts.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "catalog_summary",
     description: "Counts by kind, category and review decision, open requests and assets needing fixes. Good first call.",
     inputSchema: { type: "object", properties: {} },
@@ -185,6 +190,7 @@ function call(name, a = {}) {
         decisions: store.DECISIONS, flags: store.FLAGS,
       };
     }
+    case "list_sources": return store.listSources(store.load());
     case "catalog_summary": {
       const lib = store.load();
       const by = (f) => lib.assets.reduce((m, x) => ((m[f(x)] = (m[f(x)] || 0) + 1), m), {});
