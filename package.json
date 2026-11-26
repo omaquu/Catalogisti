@@ -22,7 +22,7 @@
     "directories": { "output": "dist" },
     "files": ["main.js", "preload.js", "package.json", "src/**/*", "mcp/**/*"],
     "extraResources": [{ "from": "mcp/", "to": "mcp/" }],
-    "win": { "target": ["portable"], "icon": "build/icon.ico" },
+    "win": { "target": ["portable"], "icon": "build/icon.ico", "signAndEditExecutable": false },
     "portable": { "artifactName": "Catalogisti-${version}-portable.exe" }
   }
 }
