@@ -45,4 +45,7 @@ contextBridge.exposeInMainWorld("catalogisti", {
   onLibraryChanged: (fn) => ipcRenderer.on("library:changed", (_e, by) => fn(by)),
   onGpuLost: (fn) => ipcRenderer.on("gpu:lost", (_e, reason) => fn(reason)),
   relaunch: () => call("app:relaunch"),
+  meshAnalyze: (id, opts) => call("mesh:analyze", id, opts),
+  meshPreview: (id, opts) => call("mesh:preview", id, opts),
+  meshClean: (id, opts) => call("mesh:clean", id, opts),
 });

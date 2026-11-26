@@ -1,12 +1,12 @@
 {
   "name": "catalogisti",
-  "version": "2.5.1",
+  "version": "2.6.0",
   "description": "Catalogisti — desktop library for game 3D models and textures, with quality reviews and an MCP server for AI agents",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "mcp": "node mcp/server.js",
-    "test": "node test/store.test.js && node test/mcp.test.js",
+    "test": "node test/store.test.js && node test/mcp.test.js && node test/meshclean.test.js",
     "dist": "electron-builder --win portable",
     "dist:dir": "electron-builder --win dir"
   },

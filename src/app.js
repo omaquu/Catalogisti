@@ -354,6 +354,7 @@
     if (!a) return;
     $("insp-kind").textContent = a.kind;
     $("insp-kind").className = "kind-badge " + a.kind;
+    $("act-clean").hidden = !(a.kind === "model" && /\.glb$/i.test(a.file));
     if (document.activeElement !== $("insp-name")) $("insp-name").value = a.name;
     renderCategories(a);
     renderDupBanner(a);
@@ -526,6 +527,72 @@
     const box = el("span", {}, [...sizes].map(([k, n]) => n + " × " + k).join(", ") + (total ? " · " + bytes(total) + " of the file" : ""));
     if (/\.glb$/i.test(a.file) && t.some((x) => x.width > 256)) box.append(" ", el("button", { type: "button", class: "small", onclick: () => openShrink(a) }, "Shrink…"));
     return box;
+  }
+
+  // ── Clean up: loose pieces, small holes, texture size — with a before/after preview ──
+  function openClean(a) {
+    const dlg = $("dlg-clean");
+    $("clean-title").textContent = "Clean up: " + a.name;
+    $("clean-before").replaceChildren(modelViewer(toUrl(a.file), { "shadow-intensity": "1", alt: "Original" }));
+    $("clean-after").replaceChildren();
+    $("clean-tex").replaceChildren(el("strong", {}, "Textures: "), textureSummary(a));
+    const opts = () => ({ maxPercent: $("clean-loose").checked ? Number($("clean-pct").value) : 0, inside: $("clean-inside").checked,
+      holePercent: $("clean-holes").checked ? Number($("clean-hole").value) : 0 });
+    let timer, run = 0;
+    const update = () => {
+      $("clean-pct-out").textContent = $("clean-pct").value;
+      $("clean-hole-out").textContent = $("clean-hole").value;
+      $("clean-pct").disabled = $("clean-inside").disabled = !$("clean-loose").checked;
+      $("clean-hole").disabled = !$("clean-holes").checked;
+      $("clean-summary").textContent = "Checking…";
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        const my = ++run, o = opts();
+        let s, p;
+        try { s = await api.meshAnalyze(a.id, o); p = await api.meshPreview(a.id, o); } catch (e) { $("clean-summary").textContent = "⚠ " + e.message; return; }
+        if (my !== run || !dlg.open) return;
+        const lines = [fmt.format(s.triangles) + " triangles in " + fmt.format(s.pieces) + " separate piece(s)."];
+        if (s.fragmented) lines.push("This mesh falls apart into many small bits, so nothing is removed automatically.");
+        else if (o.maxPercent) lines.push(s.loose ? "Removes " + s.loose + " loose piece(s), " + fmt.format(s.looseTriangles) + " triangles." : "No loose floating pieces found.");
+        if (o.holePercent) lines.push(s.smallHoles ? "Fills " + s.smallHoles + " small hole(s)" + (p.addedTriangles ? " with " + fmt.format(p.addedTriangles) + " triangles" : "") + "." : "No small holes found.");
+        if (s.holes > s.smallHoles) lines.push(s.holes - s.smallHoles + " larger opening(s) left open.");
+        $("clean-summary").textContent = lines.join(" ");
+        $("clean-summary").className = "clean-summary" + (s.fragmented ? " warn" : "");
+        $("clean-ok").disabled = !p.changed;
+        $("clean-after-cap").textContent = p.changed ? "After: red = removed, green = new fill" : "After: no change";
+        $("clean-after").replaceChildren(modelViewer(toUrl(p.file || a.file), { "shadow-intensity": "1", alt: "Cleaned preview" }));
+        syncViews($("clean-before").querySelector("model-viewer"), $("clean-after").querySelector("model-viewer"));
+      }, 250);
+    };
+    for (const id of ["clean-loose", "clean-pct", "clean-inside", "clean-holes", "clean-hole"]) $(id).oninput = update;
+    dlg.returnValue = "";
+    dlg.showModal();
+    update();
+    dlg.onclose = async () => {
+      run++;
+      $("clean-before").replaceChildren(); $("clean-after").replaceChildren();
+      if (dlg.returnValue !== "ok") return;
+      const r = await call(api.meshClean, a.id, opts());
+      say(r.changed ? "Cleaned " + a.name + ": " + [r.removedPieces ? r.removedPieces + " loose piece(s) removed" : "", r.filledHoles ? r.filledHoles + " hole(s) filled" : ""].filter(Boolean).join(", ") + ". The original is in the version history." : "Nothing to clean.");
+      await reload(); renderInspector(true);
+    };
+  }
+
+  // Turning either view turns the other, so before/after stay comparable.
+  function syncViews(x, y) {
+    if (!x || !y) return;
+    const follow = (from, to) => from.addEventListener("camera-change", (e) => {
+      if (e.detail?.source !== "user-interaction") return;
+      x.autoRotate = y.autoRotate = false;
+      const o = from.getCameraOrbit();
+      to.cameraOrbit = o.theta + "rad " + o.phi + "rad " + o.radius + "m";
+      to.fieldOfView = from.getFieldOfView() + "deg";
+      to.cameraTarget = from.getCameraTarget().toString();
+      to.jumpCameraToGoal();
+    });
+    follow(x, y); follow(y, x);
+    x.autoRotate = y.autoRotate = false;
+    y.cameraOrbit = x.cameraOrbit = "30deg 75deg auto";
   }
 
   function openShrink(a) {
@@ -872,6 +939,7 @@
     $("preview").addEventListener("dblclick", () => { const a = selectedAsset(); if (a) openBigView(a); });
     $("view-close").addEventListener("click", () => $("dlg-view").close());
     $("act-show").addEventListener("click", () => { const a = selectedAsset(); if (a) api.showInFolder(a.file); });
+    $("act-clean").addEventListener("click", () => { const a = selectedAsset(); if (a) openClean(a); });
     $("act-replace").addEventListener("click", async () => {
       const a = selectedAsset(); if (!a) return;
       const r = await call(api.replaceFile, a.id);

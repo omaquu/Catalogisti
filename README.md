@@ -23,6 +23,10 @@ and let AI agents use the same library through an MCP server.
 - **Embedded texture sizes** of every GLB (e.g. 2 × 2048×2048 PNG) and
   **Shrink…** to rewrite them at 1024/512/256 px (optionally as JPEG); the
   original stays in the version history.
+- **Clean up model…**: remove loose floating pieces and fill small holes, with
+  a before/after preview (red = removed, green = new fill). Only triangles
+  change, so UVs, skin weights and rigs stay intact; the original stays in the
+  version history.
 - **Organize files into folders**: `<Library>\<Project>\Models\<Category>` and
   `<Library>\<Project>\Textures\<Category>\<Texture>`; files outside the
   library folder are copied, inside it moved; undo available.
@@ -103,6 +107,7 @@ Node.js must be on the PATH. Tools:
 | `link_variants`, `unlink_variant`, `resolve_duplicate` | Variant groups and same-name pairs (merge / link / keep) |
 | `add_asset` | Register a generated GLB or texture (`request_id`, or `replaces` for a fixed version) |
 | `request_asset`, `list_requests`, `update_request` | Generation work queue |
+| `clean_model` | Report or remove loose floating pieces and fill small holes in a .glb (dry run by default) |
 | `delete_asset` | Remove from the catalog (the file stays on disk) |
 
 New models are generated with the Modly MCP (image-to-3D), reduced to the

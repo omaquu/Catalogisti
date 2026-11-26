@@ -137,6 +137,30 @@ app.whenReady().then(() => {
     mutate((l) => store.replaceFile(l, id, out, "Textures shrunk to " + max + " px" + (toJpeg ? " (JPEG)" : ""), "owner"));
     return { changed: r.changed, before, after: r.size, file: out };
   });
+  // ── Mesh clean-up: loose floating pieces and small holes ──
+  const meshclean = require(path.join(MCP_DIR, "meshclean.js"));
+  const glbOf = (id) => { const a = store.findAsset(store.load(), id); if (!/\.glb$/i.test(a.file)) throw new Error("Only .glb models can be cleaned."); return a; };
+  handle("mesh:analyze", (id, opts) => meshclean.analyzeGlb(glbOf(id).file, opts));
+  handle("mesh:preview", (id, opts) => {
+    const a = glbOf(id);
+    const dir = path.join(require("os").tmpdir(), "catalogisti-preview");
+    fs.mkdirSync(dir, { recursive: true });
+    for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f), { force: true });
+    const out = path.join(dir, a.id + "_" + Date.now() + ".glb");
+    const r = meshclean.cleanGlb(a.file, out, { ...opts, highlight: true });
+    return { ...r, file: r.changed ? out : null };
+  });
+  handle("mesh:clean", (id, opts) => {
+    const a = glbOf(id);
+    const stem = path.basename(a.file, ".glb").replace(/_clean(_\d+)?$/, "");
+    let out = path.join(path.dirname(a.file), stem + "_clean.glb"), n = 2;
+    while (fs.existsSync(out)) out = path.join(path.dirname(a.file), stem + "_clean_" + n++ + ".glb");
+    const r = meshclean.cleanGlb(a.file, out, opts);
+    if (!r.changed) return r;
+    const note = [r.removedPieces ? "removed " + r.removedPieces + " loose piece(s), " + r.removedTriangles + " triangles" : "", r.filledHoles ? "filled " + r.filledHoles + " small hole(s)" : ""].filter(Boolean).join("; ");
+    mutate((l) => store.replaceFile(l, id, out, "Cleaned up: " + note, "owner"));
+    return { ...r, file: out };
+  });
   handle("organize:plan", () => {
     const lib = store.load();
     const ops = store.planOrganize(lib);

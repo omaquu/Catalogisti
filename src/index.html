@@ -99,6 +99,7 @@
       </div>
       <div class="actions">
         <button id="act-show" type="button">Show in folder</button>
+        <button id="act-clean" type="button" title="Remove loose floating pieces, fill small holes, shrink textures">Clean up model…</button>
         <button id="act-replace" type="button" title="Swap to a corrected file; the old one stays in the version history">Replace with fixed version…</button>
         <button id="act-request" type="button">Request regeneration</button>
       </div>
@@ -157,6 +158,33 @@
     <p id="org-plan"></p>
     <p class="hint">Files already inside the library folder are moved. Files elsewhere (for example a shared texture library) are copied, so other projects keep working. Reviews, tags and source images stay linked. You can undo the last run.</p>
     <div class="dlg-foot"><button id="org-undo" type="button" hidden>Undo last organize</button><button value="cancel" type="submit">Cancel</button><button value="ok" id="org-ok" class="primary" type="submit">Organize</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-clean" class="big">
+  <form method="dialog" class="clean-form">
+    <div class="view-head"><h2 id="clean-title">Clean up model</h2></div>
+    <div class="clean-body">
+      <div class="clean-compare">
+        <figure><figcaption>Original</figcaption><div id="clean-before" class="view-stage"></div></figure>
+        <figure><figcaption id="clean-after-cap">After</figcaption><div id="clean-after" class="view-stage"></div></figure>
+      </div>
+      <div class="clean-side">
+        <label class="check"><input id="clean-loose" type="checkbox" checked> Remove loose floating pieces</label>
+        <label class="range"><span>Pieces smaller than <output id="clean-pct-out">2</output> % of the model</span>
+          <input id="clean-pct" type="range" min="0.2" max="10" step="0.2" value="2"></label>
+        <label class="check"><input id="clean-inside" type="checkbox"> Also small separate pieces inside the model's outline</label>
+        <hr>
+        <label class="check"><input id="clean-holes" type="checkbox"> Fill small holes</label>
+        <label class="range"><span>Holes up to <output id="clean-hole-out">5</output> % of the model's size</span>
+          <input id="clean-hole" type="range" min="1" max="20" step="1" value="5"></label>
+        <p id="clean-summary" class="clean-summary"></p>
+        <hr>
+        <p id="clean-tex"></p>
+        <p class="hint">Only triangles are removed or added: vertices, UVs and skin weights stay, so rigs keep working. Large open edges (sleeves, openings) are never filled. A new file "&lt;name&gt;_clean.glb" is written; the original stays on disk and in the version history (Restore brings it back).</p>
+      </div>
+    </div>
+    <div class="dlg-foot"><button value="cancel" type="submit">Cancel</button><button id="clean-ok" value="ok" class="primary" type="submit">Save cleaned model</button></div>
   </form>
 </dialog>
 

@@ -168,6 +168,17 @@ dialog.big[open] { display: flex; }
 .viewer-status .bar i { display: block; height: 100%; width: 0; background: var(--accent, #6aa0ff); transition: width .2s; }
 .gpu-banner { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50; display: flex; gap: 12px; align-items: center;
   padding: 10px 14px; border-radius: 8px; background: #3a2222; color: #ffd9d2; box-shadow: 0 6px 24px #0008; font-size: 13px; }
+#dlg-clean .clean-form { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.clean-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; margin-top: 8px; }
+.clean-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 0; }
+.clean-compare figure { margin: 0; display: flex; flex-direction: column; min-height: 0; }
+.clean-compare figcaption { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.clean-compare .view-stage { flex: 1; position: relative; }
+.clean-side { overflow: auto; font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+.clean-side label.range { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+.clean-side hr { width: 100%; border: 0; border-top: 1px solid #ffffff14; margin: 4px 0; }
+.clean-summary { background: #ffffff0a; border-radius: 6px; padding: 8px 10px; margin: 0; line-height: 1.5; }
+.clean-summary.warn { color: #f0c78a; }
 .preview-caption { margin: 4px 0 0; font-size: 11px; color: var(--muted); min-height: 14px; }
 .media-strip { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 2px; }
 .media-strip button { flex: none; width: 72px; padding: 0; overflow: hidden; display: flex; flex-direction: column; background: #111216; }

@@ -99,6 +99,14 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { id: str("Asset id"), whole_group: { type: "boolean", description: "Also remove all linked variants" } }, required: ["id"] },
   },
   {
+    name: "clean_model",
+    description: "Check or fix a .glb model: remove loose floating pieces (junk outside the model) and fill small holes. dry_run (default true) only reports. Applying writes <name>_clean.glb and keeps the original in the version history; vertices, UVs and skin weights are untouched.",
+    inputSchema: { type: "object", properties: { id: str("Model asset id"), dry_run: { type: "boolean", description: "Only report (default true)" },
+      max_piece_percent: { type: "number", description: "Remove separate pieces smaller than this % of the triangles (default 2, 0 = keep all)" },
+      inside: { type: "boolean", description: "Also remove small separate pieces inside the model's outline (default false)" },
+      hole_percent: { type: "number", description: "Fill holes up to this % of the model's size (default 0 = off, 5 is a good value)" } }, required: ["id"] },
+  },
+  {
     name: "edit_categories",
     description: "Add and/or remove categories. An asset can be in several (e.g. Railway and Props). Standard names are in list_categories; new ones are allowed.",
     inputSchema: { type: "object", properties: { id: str("Asset id"), add: arr("Categories to add"), remove: arr("Categories to remove") }, required: ["id"] },
@@ -216,6 +224,20 @@ function call(name, a = {}) {
     case "edit_tags": return store.summary(store.mutate((lib) => store.editTags(lib, a.id, a.add || [], a.remove || []), AGENT));
     case "update_asset": return store.summary(store.mutate((lib) => store.updateAsset(lib, a.id, a), AGENT));
     case "add_asset": return store.summary(store.mutate((lib) => store.addAsset(lib, a, AGENT), AGENT));
+    case "clean_model": {
+      const path = require("path"), fs = require("fs"), meshclean = require("./meshclean");
+      const asset = store.findAsset(store.load(), a.id);
+      if (!/\.glb$/i.test(asset.file)) throw new Error("Only .glb models can be cleaned.");
+      const opts = { maxPercent: a.max_piece_percent ?? 2, inside: !!a.inside, holePercent: a.hole_percent ?? 0 };
+      const report = meshclean.analyzeGlb(asset.file, opts);
+      if (a.dry_run !== false) return { dry_run: true, report };
+      const stem = path.basename(asset.file, ".glb").replace(/_clean(_\d+)?$/, "");
+      let out = path.join(path.dirname(asset.file), stem + "_clean.glb"), n = 2;
+      while (fs.existsSync(out)) out = path.join(path.dirname(asset.file), stem + "_clean_" + n++ + ".glb");
+      const r = meshclean.cleanGlb(asset.file, out, opts);
+      if (r.changed) store.mutate((lib) => store.replaceFile(lib, a.id, out, "Cleaned up by agent: " + r.removedPieces + " loose piece(s), " + r.filledHoles + " hole(s) filled", AGENT), AGENT);
+      return { ...r, file: r.changed ? out : asset.file, report };
+    }
     case "delete_asset": {
       const removed = store.mutate((lib) => store.deleteAsset(lib, a.id, { wholeGroup: !!a.whole_group }), AGENT);
       return { deleted: removed.map((r) => r.id), files_kept_on_disk: removed.flatMap(store.ownedFiles) };
